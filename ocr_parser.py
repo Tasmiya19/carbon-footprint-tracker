@@ -22,6 +22,8 @@ import cv2
 import pytesseract
 from PIL import Image
 
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
 
 # Common phrasings used on electricity bills for consumption, in order
 # of how likely they are to appear. Add more patterns as you test real bills.
@@ -30,8 +32,43 @@ UNIT_PATTERNS = [
     r"total\s*units\s*[:\-]?\s*(\d+(?:\.\d+)?)",
     r"consumption\s*\(kwh\)\s*[:\-]?\s*(\d+(?:\.\d+)?)",
     r"kwh\s*consumed\s*[:\-]?\s*(\d+(?:\.\d+)?)",
+    # Matches bills like "Consumption(Units)" or "Consumption (Units)" followed
+    # by the number on the same line or the line right after it.
+    r"consumption\s*\(\s*units?\s*\)\s*[:\-]?\s*\n?\s*(\d+(?:\.\d+)?)",
     r"(\d+(?:\.\d+)?)\s*kwh",
+    # Fallback for tabular "Energy Charges (Unit, Rate, Amount)" bills where
+    # the units value sits alone on the next line, e.g.:
+    #   Energy Charges (Unit Rate, Amount)
+    #   141          4.15          585.15
+    r"energy\s*charges[^\n]*\n\s*([\d\]\)]{1,4})\s",
 ]
+
+
+def _clean_ocr_digits(raw: str) -> str:
+    """
+    Tesseract commonly misreads the digit '1' as ']' or ')' in noisy scans
+    (e.g. "141" -> "14]"). Undo that specific, common substitution before
+    converting to a number.
+    """
+    return raw.replace("]", "1").replace(")", "1")
+
+
+def extract_units_from_text(text: str):
+    """
+    Given already-extracted OCR text, try each pattern in turn.
+    Split out from extract_units_consumed() so it can be tested/reused
+    without needing an actual image file.
+    """
+    text_lower = text.lower()
+    for pattern in UNIT_PATTERNS:
+        match = re.search(pattern, text_lower)
+        if match:
+            cleaned = _clean_ocr_digits(match.group(1))
+            try:
+                return float(cleaned)
+            except ValueError:
+                continue  # this match wasn't actually numeric after cleanup, try next pattern
+    return None
 
 
 def preprocess_image(image_path: str):
@@ -66,14 +103,8 @@ def extract_units_consumed(image_path: str) -> float | None:
     Returns None if no pattern matched (caller should fall back to
     manual entry in that case).
     """
-    text = extract_raw_text(image_path).lower()
-
-    for pattern in UNIT_PATTERNS:
-        match = re.search(pattern, text)
-        if match:
-            return float(match.group(1))
-
-    return None
+    text = extract_raw_text(image_path)
+    return extract_units_from_text(text)
 
 
 if __name__ == "__main__":
