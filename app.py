@@ -40,15 +40,40 @@ st.subheader("Step 1: Provide your electricity usage")
 
 input_mode = st.radio(
     "How would you like to provide your data?",
-    ["Enter units manually", "Upload electricity bill image (OCR)"],
+    [
+        "Enter units manually",
+        "Upload electricity bill image (OCR)",
+        "Scan live using camera (OCR)",
+    ],
 )
 
 units_consumed = None
 
+
+def run_ocr_on_bytes(image_bytes: bytes, caption: str):
+    """
+    Save uploaded/captured image bytes to a temp file, run OCR, show the
+    image, and return the extracted units (or None if extraction failed).
+    """
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+        tmp.write(image_bytes)
+        tmp_path = tmp.name
+
+    st.image(image_bytes, caption=caption, width=300)
+
+    extracted = extract_units_consumed(tmp_path)
+    if extracted is not None:
+        st.success(f"OCR detected {extracted} units consumed.")
+        return extracted
+
+    st.warning("Couldn't automatically read units from this image. Please enter manually.")
+    return None
+
+
 if input_mode == "Enter units manually":
     units_consumed = st.number_input("Electricity units consumed (kWh)", min_value=0.0, step=1.0)
 
-else:
+elif input_mode == "Upload electricity bill image (OCR)":
     if not OCR_AVAILABLE:
         st.warning(
             "OCR dependencies (pytesseract / opencv-python) or the Tesseract "
@@ -58,19 +83,26 @@ else:
     else:
         uploaded_file = st.file_uploader("Upload a photo/scan of your bill", type=["jpg", "jpeg", "png"])
         if uploaded_file is not None:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                tmp.write(uploaded_file.read())
-                tmp_path = tmp.name
+            extracted = run_ocr_on_bytes(uploaded_file.read(), "Uploaded bill")
+            units_consumed = extracted if extracted is not None else st.number_input(
+                "Electricity units consumed (kWh)", min_value=0.0, step=1.0
+            )
 
-            st.image(uploaded_file, caption="Uploaded bill", width=300)
-
-            extracted = extract_units_consumed(tmp_path)
-            if extracted is not None:
-                st.success(f"OCR detected {extracted} units consumed.")
-                units_consumed = extracted
-            else:
-                st.warning("Couldn't automatically read units from this bill. Please enter manually.")
-                units_consumed = st.number_input("Electricity units consumed (kWh)", min_value=0.0, step=1.0)
+else:  # Scan live using camera (OCR)
+    if not OCR_AVAILABLE:
+        st.warning(
+            "OCR dependencies (pytesseract / opencv-python) or the Tesseract "
+            "engine aren't installed. Falling back to manual entry below."
+        )
+        units_consumed = st.number_input("Electricity units consumed (kWh)", min_value=0.0, step=1.0)
+    else:
+        st.caption("Point your camera at the full bill, keep it flat and well-lit, then click Take Photo.")
+        camera_image = st.camera_input("Scan your electricity bill")
+        if camera_image is not None:
+            extracted = run_ocr_on_bytes(camera_image.getvalue(), "Live-scanned bill")
+            units_consumed = extracted if extracted is not None else st.number_input(
+                "Electricity units consumed (kWh)", min_value=0.0, step=1.0
+            )
 
 st.subheader("Step 2: Output")
 
