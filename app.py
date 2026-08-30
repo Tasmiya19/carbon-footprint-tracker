@@ -21,6 +21,8 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import tempfile
+import base64
+import time
 
 from carbon_calculator import build_result, EMISSION_FACTOR_KG_PER_KWH
 from database import init_db, save_record, get_all_records
@@ -133,18 +135,54 @@ def render_eco_gauge(score: int):
     st.plotly_chart(fig, use_container_width=True)
 
 
+def show_scanning_animation(image_bytes: bytes, seconds: float = 2.0):
+    """
+    Display the captured/uploaded image with an animated horizontal
+    scan-line sweeping over it, like a real document scanner, for a
+    short moment before showing the OCR result. Purely visual --
+    doesn't affect the actual OCR logic.
+    """
+    encoded = base64.b64encode(image_bytes).decode()
+    scanner_html = f"""
+    <div style="position:relative; width:280px; margin:auto; overflow:hidden;
+                border-radius:8px; border:2px solid #2E7D32;">
+        <img src="data:image/jpeg;base64,{encoded}" style="width:100%; display:block;">
+        <div style="position:absolute; left:0; width:100%; height:4px;
+                    background:linear-gradient(90deg, rgba(46,125,50,0) 0%, #66BB6A 50%, rgba(46,125,50,0) 100%);
+                    box-shadow:0 0 8px 2px #66BB6A;
+                    animation: scanSweep {seconds}s ease-in-out infinite;"></div>
+    </div>
+    <style>
+        @keyframes scanSweep {{
+            0%   {{ top: 0%; }}
+            50%  {{ top: 96%; }}
+            100% {{ top: 0%; }}
+        }}
+    </style>
+    """
+    placeholder = st.empty()
+    placeholder.markdown(scanner_html, unsafe_allow_html=True)
+    with st.spinner("🔍 Scanning bill..."):
+        time.sleep(seconds)
+    placeholder.empty()
+
+
 def run_ocr_on_bytes(image_bytes: bytes, caption: str):
     """
-    Save uploaded/captured image bytes to a temp file, run OCR, show the
-    image, and return the extracted units (or None if extraction failed).
+    Save uploaded/captured image bytes to a temp file, run OCR (with a
+    scanning animation shown first), and return the extracted units
+    (or None if extraction failed).
     """
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
         tmp.write(image_bytes)
         tmp_path = tmp.name
 
-    st.image(image_bytes, caption=caption, width=280)
+    show_scanning_animation(image_bytes)
 
     extracted = extract_units_consumed(tmp_path)
+
+    st.image(image_bytes, caption=caption, width=280)
+
     if extracted is not None:
         st.success(f"✅ OCR detected **{extracted} units** consumed.")
         return extracted
