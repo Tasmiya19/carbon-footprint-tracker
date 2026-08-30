@@ -17,12 +17,18 @@ below are a starting point -- test against your own sample bills
 in data/sample_bills/ and add patterns as needed.
 """
 
+import platform
 import re
 import cv2
 import pytesseract
 from PIL import Image
 
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+# On Windows, Tesseract isn't automatically on PATH after installing, so we
+# point pytesseract at the default install location. On Linux (e.g. Streamlit
+# Cloud, where packages.txt installs tesseract-ocr) and macOS (via Homebrew),
+# it's already on PATH, so we leave pytesseract to find it automatically.
+if platform.system() == "Windows":
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
 # Common phrasings used on electricity bills for consumption, in order
