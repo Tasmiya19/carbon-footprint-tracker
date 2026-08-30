@@ -3,4 +3,4 @@ pandas
 plotly
 pytesseract
 pillow
-opencv-python
+opencv-python-headless
