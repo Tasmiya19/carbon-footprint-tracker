@@ -49,53 +49,157 @@ init_db()
 
 CUSTOM_CSS = """
 <style>
-    .main-header {
-        font-size: 2.1rem;
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+    }
+
+    /* Hide default Streamlit chrome for a cleaner "website" feel */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+
+    .block-container {
+        padding-top: 1.5rem;
+        max-width: 1100px;
+    }
+
+    /* Hero banner */
+    .hero-banner {
+        background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 45%, #66BB6A 100%);
+        border-radius: 18px;
+        padding: 2.2rem 2.5rem;
+        color: white;
+        margin-bottom: 1.8rem;
+        box-shadow: 0 8px 24px rgba(27, 94, 32, 0.25);
+    }
+    .hero-banner h1 {
+        font-family: 'Poppins', sans-serif;
+        font-size: 2.2rem;
         font-weight: 700;
+        margin: 0 0 0.3rem 0;
+        color: white;
+    }
+    .hero-banner p {
+        font-size: 1.05rem;
+        margin: 0;
+        opacity: 0.92;
+    }
+
+    .section-title {
+        font-family: 'Poppins', sans-serif;
+        font-weight: 600;
         color: #1B5E20;
-        margin-bottom: 0;
+        font-size: 1.3rem;
+        margin-top: 0.5rem;
+        margin-bottom: 0.8rem;
+        border-left: 4px solid #66BB6A;
+        padding-left: 0.6rem;
     }
-    .sub-header {
-        color: #558B2F;
-        font-size: 1rem;
-        margin-top: 0;
-    }
+
+    /* Cards */
     .metric-card {
-        background-color: #F1F8E9;
-        border-radius: 12px;
-        padding: 1.2rem 1.5rem;
+        background-color: #ffffff;
+        border-radius: 14px;
+        padding: 1.3rem 1.5rem;
         text-align: center;
-        border: 1px solid #C5E1A5;
+        border: 1px solid #E0E0E0;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .metric-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 6px 18px rgba(46,125,50,0.15);
     }
     .metric-card h2 {
-        margin: 0;
+        margin: 0.2rem 0 0 0;
         color: #2E7D32;
+        font-family: 'Poppins', sans-serif;
         font-size: 1.8rem;
     }
     .metric-card p {
         margin: 0;
-        color: #616161;
-        font-size: 0.9rem;
+        color: #757575;
+        font-size: 0.88rem;
+        font-weight: 500;
     }
+
     .recommendation-banner {
-        background-color: #FFF8E1;
+        background: linear-gradient(135deg, #FFFDE7, #FFF8E1);
         border-left: 5px solid #FBC02D;
-        padding: 1rem 1.2rem;
-        border-radius: 6px;
+        padding: 1.1rem 1.4rem;
+        border-radius: 10px;
         font-size: 1rem;
-        margin-top: 1rem;
+        margin-top: 1.2rem;
+        box-shadow: 0 2px 8px rgba(251,192,45,0.15);
     }
+
     .coming-soon-box {
         background-color: #FAFAFA;
-        border: 1px dashed #BDBDBD;
-        border-radius: 10px;
-        padding: 2rem;
+        border: 1.5px dashed #BDBDBD;
+        border-radius: 14px;
+        padding: 2.5rem;
         text-align: center;
         color: #757575;
+    }
+
+    /* Buttons */
+    div.stButton > button {
+        background: linear-gradient(135deg, #2E7D32, #43A047);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 0.55rem 1.4rem;
+        font-weight: 600;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    div.stButton > button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 14px rgba(46,125,50,0.35);
+        color: white;
+    }
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px 8px 0 0;
+        font-weight: 600;
+        padding: 0.6rem 1.2rem;
+    }
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background-color: #F1F8E9;
+    }
+
+    .footer-note {
+        text-align: center;
+        color: #9E9E9E;
+        font-size: 0.8rem;
+        margin-top: 2.5rem;
+        padding-top: 1rem;
+        border-top: 1px solid #E0E0E0;
     }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+def render_hero(title: str, subtitle: str):
+    st.markdown(
+        f"""<div class="hero-banner"><h1>{title}</h1><p>{subtitle}</p></div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_footer():
+    st.markdown(
+        '<div class="footer-note">AI-Powered Carbon Footprint Tracking & Reduction System · Major Project</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +299,7 @@ def render_output(units_consumed: float, user_name: str):
     """Render the styled Step 2 output: metric cards, eco-score, recommendation, save to DB."""
     st.subheader("Step 2: Output")
 
-    if st.button("🧮 Calculate carbon footprint", type="primary"):
+    if st.button("🧮 Calculate Carbon Footprint", type="primary"):
         result = build_result(units_consumed)
         score = result["ecoScore"]
 
@@ -252,9 +356,10 @@ def render_history():
 # ---------------------------------------------------------------------------
 
 def render_electricity_module():
-    st.markdown('<p class="main-header">🌱 AI-Powered Carbon Footprint Tracker</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Electricity Bill Module -- Input to Output Pipeline</p>', unsafe_allow_html=True)
-    st.divider()
+    render_hero(
+        "🌱 AI-Powered Carbon Footprint Tracker",
+        "Electricity Bill Module — Input to Output Pipeline",
+    )
 
     tab_overview, tab_demo, tab_history = st.tabs(["📋 Overview", "🧪 Try It Live", "📊 History"])
 
@@ -267,9 +372,11 @@ def render_electricity_module():
     with tab_history:
         render_history()
 
+    render_footer()
+
 
 def render_overview():
-    st.subheader("How this module works")
+    st.markdown('<p class="section-title">How this module works</p>', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
     steps = [
         ("📄", "1. Input", "Bill photo, live camera scan, or manual entry"),
@@ -302,7 +409,7 @@ def render_overview():
 def render_demo():
     user_name = st.text_input("Your name", value="Guest")
 
-    st.subheader("Step 1: Provide your electricity usage")
+    st.markdown('<p class="section-title">Step 1: Provide your electricity usage</p>', unsafe_allow_html=True)
 
     input_mode = st.radio(
         "How would you like to provide your data?",
@@ -363,14 +470,13 @@ def render_demo():
 # ---------------------------------------------------------------------------
 
 def render_placeholder(title: str, description: str):
-    st.markdown(f'<p class="main-header">{title}</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Coming Soon</p>', unsafe_allow_html=True)
-    st.divider()
+    render_hero(title, "Coming Soon")
     st.markdown(
         f"""<div class="coming-soon-box">🚧<br><br>{description}<br><br>
         <i>Planned for a future release of this project.</i></div>""",
         unsafe_allow_html=True,
     )
+    render_footer()
 
 
 # ---------------------------------------------------------------------------
