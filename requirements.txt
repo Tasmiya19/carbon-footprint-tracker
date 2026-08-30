@@ -1,5 +1,6 @@
 streamlit
 pandas
+plotly
 pytesseract
 pillow
 opencv-python
