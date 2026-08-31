@@ -103,14 +103,45 @@ def extract_raw_text(image_path: str) -> str:
     return pytesseract.image_to_string(processed)
 
 
-def extract_units_consumed(image_path: str) -> float | None:
+def extract_all_candidate_numbers(text: str) -> list:
+    """
+    Fallback for when no specific pattern matches (bill layout not
+    covered by UNIT_PATTERNS). Pulls out every plausible standalone
+    number from the OCR text -- typical household electricity
+    consumption is between 1 and 2000 units -- so the user can pick
+    the correct one instead of the system giving up entirely.
+    Numbers are de-duplicated and returned in the order they first appear.
+    """
+    cleaned_text = _clean_ocr_digits(text)
+    raw_matches = re.findall(r"\d+(?:\.\d+)?", cleaned_text)
+
+    candidates = []
+    seen = set()
+    for raw in raw_matches:
+        value = float(raw)
+        if 1 <= value <= 2000 and value not in seen:
+            candidates.append(value)
+            seen.add(value)
+
+    return candidates
+
+
+def extract_units_consumed(image_path: str):
     """
     Extract the electricity units consumed (kWh) from a bill image.
-    Returns None if no pattern matched (caller should fall back to
-    manual entry in that case).
+
+    Returns a tuple: (units_or_none, candidates)
+        - If a known pattern matched: (units, [])
+        - If nothing matched but numbers were found: (None, [list of candidate numbers])
+        - If OCR found nothing usable at all: (None, [])
+    Caller should fall back to manual entry only in the last case,
+    and otherwise let the user pick from candidates.
     """
     text = extract_raw_text(image_path)
-    return extract_units_from_text(text)
+    units = extract_units_from_text(text)
+    if units is not None:
+        return units, []
+    return None, extract_all_candidate_numbers(text)
 
 
 if __name__ == "__main__":
@@ -125,4 +156,7 @@ if __name__ == "__main__":
         print("--- Raw OCR text ---")
         print(extract_raw_text(path))
         print("--- Extracted units ---")
-        print(extract_units_consumed(path))
+        units, candidates = extract_units_consumed(path)
+        print(units)
+        print("--- Candidate numbers (if no direct match) ---")
+        print(candidates)
