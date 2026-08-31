@@ -271,11 +271,15 @@ def show_scanning_animation(image_bytes: bytes, seconds: float = 2.0):
     placeholder.empty()
 
 
-def run_ocr_on_bytes(image_bytes: bytes, caption: str):
+def run_ocr_on_bytes(image_bytes: bytes, caption: str, key_prefix: str):
     """
     Save uploaded/captured image bytes to a temp file, run OCR (with a
-    scanning animation shown first), and return the extracted units
-    (or None if extraction failed).
+    scanning animation shown first), and return the extracted units.
+
+    If no known bill pattern matched, but OCR still found plausible
+    numbers on the bill, the user is shown those numbers to pick from
+    -- instead of the system just giving up -- so it works reasonably
+    well across bill layouts we haven't specifically coded for.
     """
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
         tmp.write(image_bytes)
@@ -283,15 +287,29 @@ def run_ocr_on_bytes(image_bytes: bytes, caption: str):
 
     show_scanning_animation(image_bytes)
 
-    extracted = extract_units_consumed(tmp_path)
+    units, candidates = extract_units_consumed(tmp_path)
 
     st.image(image_bytes, caption=caption, width=280)
 
-    if extracted is not None:
-        st.success(f"✅ OCR detected **{extracted} units** consumed.")
-        return extracted
+    if units is not None:
+        st.success(f"✅ OCR detected **{units} units** consumed.")
+        return units
 
-    st.warning("⚠️ Couldn't automatically read units from this image. Please enter manually.")
+    if candidates:
+        st.info(
+            "Couldn't automatically identify the exact field, but found these numbers "
+            "on the bill. Select the correct **units consumed** value:"
+        )
+        choice = st.selectbox(
+            "Detected numbers",
+            options=["-- select --"] + candidates,
+            key=f"{key_prefix}_candidates",
+        )
+        if choice != "-- select --":
+            return float(choice)
+        return None
+
+    st.warning("⚠️ Couldn't automatically read this bill. Please enter manually.")
     return None
 
 
@@ -436,7 +454,7 @@ def render_demo():
         else:
             uploaded_file = st.file_uploader("Upload a photo/scan of your bill", type=["jpg", "jpeg", "png"])
             if uploaded_file is not None:
-                extracted = run_ocr_on_bytes(uploaded_file.read(), "Uploaded bill")
+                extracted = run_ocr_on_bytes(uploaded_file.read(), "Uploaded bill", key_prefix="upload")
                 units_consumed = extracted if extracted is not None else st.number_input(
                     "Electricity units consumed (kWh)", min_value=0.0, step=1.0
                 )
@@ -452,7 +470,7 @@ def render_demo():
             st.caption("Point your camera at the full bill, keep it flat and well-lit, then click Take Photo.")
             camera_image = st.camera_input("Scan your electricity bill")
             if camera_image is not None:
-                extracted = run_ocr_on_bytes(camera_image.getvalue(), "Live-scanned bill")
+                extracted = run_ocr_on_bytes(camera_image.getvalue(), "Live-scanned bill", key_prefix="camera")
                 units_consumed = extracted if extracted is not None else st.number_input(
                     "Electricity units consumed (kWh)", min_value=0.0, step=1.0
                 )
