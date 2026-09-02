@@ -477,7 +477,7 @@ def render_demo():
 
     st.caption(f"Emission factor used: {EMISSION_FACTOR_KG_PER_KWH} kg CO2 per kWh")
 
-    if units_consumed is not None and units_consumed > 0:
+    if units_consumed is not None and units_consumed >= 0:
         render_output(units_consumed, user_name)
 
 
