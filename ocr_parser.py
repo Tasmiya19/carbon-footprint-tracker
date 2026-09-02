@@ -41,6 +41,9 @@ UNIT_PATTERNS = [
     # Matches bills like "Consumption(Units)" or "Consumption (Units)" followed
     # by the number on the same line or the line right after it.
     r"consumption\s*\(\s*units?\s*\)\s*[:\-]?\s*\n?\s*(\d+(?:\.\d+)?)",
+    # Plain "Consumption : 4100" style, with no "(kWh)"/"(Units)" qualifier --
+    # common on bills that just label the field "Consumption".
+    r"consumption\s*[:\-]\s*(\d+(?:\.\d+)?)",
     r"(\d+(?:\.\d+)?)\s*kwh",
     # Fallback for tabular "Energy Charges (Unit, Rate, Amount)" bills where
     # the units value sits alone on the next line, e.g.:
@@ -80,7 +83,8 @@ def extract_units_from_text(text: str):
 def preprocess_image(image_path: str):
     """
     Basic preprocessing to improve OCR accuracy: grayscale + thresholding.
-    Returns a PIL Image ready for pytesseract.
+    Returns a PIL Image ready for pytesseract. Kept for backwards
+    compatibility / simple single-pass use.
     """
     img = cv2.imread(image_path)
     if img is None:
@@ -93,55 +97,148 @@ def preprocess_image(image_path: str):
     return Image.fromarray(thresh)
 
 
+def _generate_preprocessing_variants(image_path: str):
+    """
+    Produce a couple of differently-processed versions of the same image.
+    Different bill photos respond better to different treatment (blurry,
+    low-contrast, uneven lighting), so instead of a single fixed pipeline,
+    we try a small number and let OCR run on each. Kept intentionally
+    small (2 variants) so the total OCR time stays reasonable for a live
+    demo -- more variants catch more edge cases but get slow fast.
+    Returns a list of PIL Images.
+    """
+    img = cv2.imread(image_path)
+    if img is None:
+        raise FileNotFoundError(f"Could not read image: {image_path}")
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Upscale small/low-res photos -- OCR struggles with small text.
+    # Capped at 1400px (rather than higher) to keep OCR time reasonable.
+    h, w = gray.shape
+    if max(h, w) < 1400:
+        scale = 1400 / max(h, w)
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+    variants = []
+
+    # Variant 1: contrast boost (CLAHE) + Otsu threshold -- handles most
+    # everyday cases: mild blur, faded print, moderate lighting issues.
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    contrast_boosted = clahe.apply(gray)
+    _, otsu = cv2.threshold(contrast_boosted, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    variants.append(Image.fromarray(otsu))
+
+    # Variant 2: adaptive thresholding -- handles uneven lighting/shadows/
+    # folded paper, which Otsu alone often struggles with.
+    adaptive = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11
+    )
+    variants.append(Image.fromarray(adaptive))
+
+    return variants
+
+
 def extract_raw_text(image_path: str) -> str:
     """
-    Run OCR on a bill image and return the raw extracted text.
-    Useful for debugging: print this first to see what Tesseract
-    actually reads before writing/adjusting regex patterns.
+    Run OCR on a bill image and return the raw extracted text using a
+    single, simple preprocessing pass. Kept for quick debugging
+    (e.g. `python ocr_parser.py <image>`), where seeing one clear
+    output is more useful than a merged multi-pass result.
     """
     processed = preprocess_image(image_path)
     return pytesseract.image_to_string(processed)
 
 
+def extract_raw_text_multi(image_path: str) -> str:
+    """
+    Run OCR across a couple of preprocessing variants and Tesseract page
+    segmentation modes, then combine all the text together. Running a
+    few attempts and merging catches cases where one specific variant
+    misses text that another reads correctly -- more robust on unclear
+    real-world bill photos than a single pass, while staying fast enough
+    (2 variants x 2 configs = 4 passes) for a live demo.
+    """
+    variants = _generate_preprocessing_variants(image_path)
+    psm_configs = ["--psm 6", "--psm 11"]  # different layout assumptions
+
+    all_text = []
+    for variant in variants:
+        for config in psm_configs:
+            try:
+                text = pytesseract.image_to_string(variant, config=config)
+                if text.strip():
+                    all_text.append(text)
+            except Exception:
+                continue  # skip a failed pass, keep trying others
+
+    return "\n".join(all_text)
+
+
 def extract_all_candidate_numbers(text: str) -> list:
     """
     Fallback for when no specific pattern matches (bill layout not
-    covered by UNIT_PATTERNS). Pulls out every plausible standalone
-    number from the OCR text -- typical household electricity
-    consumption is between 1 and 2000 units -- so the user can pick
-    the correct one instead of the system giving up entirely.
-    Numbers are de-duplicated and returned in the order they first appear.
+    covered by UNIT_PATTERNS). Prioritizes numbers found near
+    consumption-related keywords (much more likely to be the right
+    value), then fills in with other plausible numbers on the bill.
+    Typical household electricity consumption is between 1 and 2000
+    units. Capped at 10 candidates so the dropdown stays usable.
     """
     cleaned_text = _clean_ocr_digits(text)
-    raw_matches = re.findall(r"\d+(?:\.\d+)?", cleaned_text)
+    lines = cleaned_text.lower().split("\n")
 
-    candidates = []
+    keywords = ["consumption", "energy charge", "units", "kwh", "consumed"]
+
+    priority_numbers = []
+    other_numbers = []
     seen = set()
-    for raw in raw_matches:
-        value = float(raw)
-        if 1 <= value <= 2000 and value not in seen:
-            candidates.append(value)
-            seen.add(value)
 
-    return candidates
+    for line in lines:
+        numbers_in_line = re.findall(r"\d+(?:\.\d+)?", line)
+        is_priority_line = any(kw in line for kw in keywords)
+        for raw in numbers_in_line:
+            value = float(raw)
+            # Wide range: covers both small household bills and larger
+            # commercial/industrial connections. Excludes only clearly
+            # implausible values (e.g. huge bill-amount or barcode numbers).
+            if 1 <= value <= 100000 and value not in seen:
+                seen.add(value)
+                (priority_numbers if is_priority_line else other_numbers).append(value)
+
+    ordered = priority_numbers + other_numbers
+    return ordered[:10]
 
 
 def extract_units_consumed(image_path: str):
     """
     Extract the electricity units consumed (kWh) from a bill image.
 
+    Strategy (fast path first, escalating only if needed):
+        1. Try a single fast preprocessing pass -- works well for most
+           clear, well-lit bill photos and keeps the app responsive.
+        2. If that finds nothing, retry with several preprocessing
+           variants + OCR configs combined -- slower, but catches more
+           on blurry/uneven-lighting photos the fast pass misses.
+        3. If a known pattern still doesn't match, fall back to a
+           prioritized list of candidate numbers for the user to pick.
+
     Returns a tuple: (units_or_none, candidates)
         - If a known pattern matched: (units, [])
         - If nothing matched but numbers were found: (None, [list of candidate numbers])
         - If OCR found nothing usable at all: (None, [])
-    Caller should fall back to manual entry only in the last case,
-    and otherwise let the user pick from candidates.
     """
-    text = extract_raw_text(image_path)
-    units = extract_units_from_text(text)
+    fast_text = extract_raw_text(image_path)
+    units = extract_units_from_text(fast_text)
     if units is not None:
         return units, []
-    return None, extract_all_candidate_numbers(text)
+
+    thorough_text = extract_raw_text_multi(image_path)
+    units = extract_units_from_text(thorough_text)
+    if units is not None:
+        return units, []
+
+    combined_text = fast_text + "\n" + thorough_text
+    return None, extract_all_candidate_numbers(combined_text)
 
 
 if __name__ == "__main__":
