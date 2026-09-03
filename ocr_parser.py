@@ -80,6 +80,65 @@ def extract_units_from_text(text: str):
     return None
 
 
+# Patterns for the "Present Reading" and "Previous Reading" meter values.
+# Almost every Indian electricity bill (regardless of state/provider or
+# exact wording for "consumption") prints these two numbers, since they're
+# what the meter reader actually recorded -- so calculating their
+# difference is a very reliable, provider-independent way to get units
+# consumed, even when the bill's specific "Consumption" label/phrasing
+# isn't one we've coded a pattern for.
+PRESENT_READING_PATTERNS = [
+    r"pres(?:ent)?\.?\s*r(?:d|e)g\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)",
+    r"present\s*reading\s*[:\-]?\s*(\d+(?:\.\d+)?)",
+]
+PREVIOUS_READING_PATTERNS = [
+    r"prev(?:ious)?\.?\s*r(?:d|e)g\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)",
+    r"previous\s*reading\s*[:\-]?\s*(\d+(?:\.\d+)?)",
+]
+CONSTANT_PATTERNS = [
+    r"constant\s*[:\-]?\s*(\d+(?:\.\d+)?)",
+    r"m(?:eter)?\.?\s*constant\s*[:\-]?\s*(\d+(?:\.\d+)?)",
+]
+
+
+def _first_match(patterns: list, text_lower: str):
+    for pattern in patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            cleaned = _clean_ocr_digits(match.group(1))
+            try:
+                return float(cleaned)
+            except ValueError:
+                continue
+    return None
+
+
+def extract_units_from_meter_readings(text: str):
+    """
+    Provider-independent fallback: units consumed = (present reading -
+    previous reading) x meter constant (constant defaults to 1 if not
+    found/printed). Validated against multiple real Indian bill formats
+    where the direct "Consumption" label wasn't reliably OCR'd, but the
+    Present/Previous Reading numbers were.
+    """
+    text_lower = text.lower()
+    present = _first_match(PRESENT_READING_PATTERNS, text_lower)
+    previous = _first_match(PREVIOUS_READING_PATTERNS, text_lower)
+
+    if present is None or previous is None:
+        return None
+
+    constant = _first_match(CONSTANT_PATTERNS, text_lower)
+    if constant is None or constant <= 0:
+        constant = 1.0
+
+    diff = (present - previous) * constant
+    if diff < 0:
+        return None  # reading rollover / OCR error -- not trustworthy, don't guess
+
+    return round(diff, 2)
+
+
 def preprocess_image(image_path: str):
     """
     Basic preprocessing to improve OCR accuracy: grayscale + thresholding.
@@ -232,8 +291,19 @@ def extract_units_consumed(image_path: str):
     if units is not None:
         return units, []
 
+    # Try the provider-independent meter-reading-difference method before
+    # escalating to slower multi-pass OCR -- cheap to check, and often
+    # works even when the direct "Consumption" label wasn't matched.
+    units = extract_units_from_meter_readings(fast_text)
+    if units is not None:
+        return units, []
+
     thorough_text = extract_raw_text_multi(image_path)
     units = extract_units_from_text(thorough_text)
+    if units is not None:
+        return units, []
+
+    units = extract_units_from_meter_readings(thorough_text)
     if units is not None:
         return units, []
 
