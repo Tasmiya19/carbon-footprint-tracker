@@ -50,6 +50,10 @@ UNIT_PATTERNS = [
     #   Energy Charges (Unit Rate, Amount)
     #   141          4.15          585.15
     r"energy\s*charges[^\n]*\n\s*([\d\]\)]{1,4})\s",
+    # Hindi-script bills (e.g. Madhya Pradesh, UP, Bihar) that label the
+    # field "कुल खपत" (total consumption) or just "खपत" (consumption).
+    r"कुल\s*खपत\s*[:\-]?\s*(\d+(?:\.\d+)?)",
+    r"खपत\s*[:\-]?\s*(\d+(?:\.\d+)?)",
 ]
 
 
@@ -92,14 +96,20 @@ PRESENT_READING_PATTERNS = [
     r"present\s*reading\s*[:\-]?\s*(\d+(?:\.\d+)?)",
     r"curr(?:ent)?\.?\s*r(?:d|e)g\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)",
     r"current\s*reading\s*[:\-]?\s*(\d+(?:\.\d+)?)",
+    # Hindi: "वर्तमान रीडिंग" (current/present reading)
+    r"वर्तमान\s*रीडिंग\s*[:\-]?\s*(\d+(?:\.\d+)?)",
 ]
 PREVIOUS_READING_PATTERNS = [
     r"prev(?:ious)?\.?\s*r(?:d|e)g\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)",
     r"previous\s*reading\s*[:\-]?\s*(\d+(?:\.\d+)?)",
+    # Hindi: "पिछली रीडिंग" (previous reading)
+    r"पिछली\s*रीडिंग\s*[:\-]?\s*(\d+(?:\.\d+)?)",
 ]
 CONSTANT_PATTERNS = [
     r"constant\s*[:\-]?\s*(\d+(?:\.\d+)?)",
     r"m(?:eter)?\.?\s*constant\s*[:\-]?\s*(\d+(?:\.\d+)?)",
+    # Hindi: "गुणांक" (multiplier/constant)
+    r"गुणांक\s*[:\-]?\s*(\d+(?:\.\d+)?)",
 ]
 
 
@@ -206,9 +216,19 @@ def extract_raw_text(image_path: str) -> str:
     single, simple preprocessing pass. Kept for quick debugging
     (e.g. `python ocr_parser.py <image>`), where seeing one clear
     output is more useful than a merged multi-pass result.
+
+    Uses English + Hindi language data when available -- many Indian
+    electricity bills (e.g. Madhya Pradesh, UP, Bihar, Rajasthan) print
+    field labels in Hindi/Devanagari script, which English-only OCR
+    can't read at all and which corrupts nearby number recognition too.
+    Falls back to English-only automatically if the Hindi language pack
+    isn't installed, so this doesn't break setups that haven't added it.
     """
     processed = preprocess_image(image_path)
-    return pytesseract.image_to_string(processed)
+    try:
+        return pytesseract.image_to_string(processed, lang="eng+hin+kan+tam+tel+mar+ben+guj")
+    except pytesseract.TesseractError:
+        return pytesseract.image_to_string(processed)  # regional packs not installed -- fall back
 
 
 def extract_raw_text_multi(image_path: str) -> str:
@@ -227,11 +247,16 @@ def extract_raw_text_multi(image_path: str) -> str:
     for variant in variants:
         for config in psm_configs:
             try:
-                text = pytesseract.image_to_string(variant, config=config)
-                if text.strip():
-                    all_text.append(text)
+                text = pytesseract.image_to_string(variant, lang="eng+hin+kan+tam+tel+mar+ben+guj", config=config)
+            except pytesseract.TesseractError:
+                try:
+                    text = pytesseract.image_to_string(variant, config=config)  # regional packs not installed
+                except Exception:
+                    continue
             except Exception:
                 continue  # skip a failed pass, keep trying others
+            if text.strip():
+                all_text.append(text)
 
     return "\n".join(all_text)
 
