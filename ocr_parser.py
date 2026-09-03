@@ -90,6 +90,8 @@ def extract_units_from_text(text: str):
 PRESENT_READING_PATTERNS = [
     r"pres(?:ent)?\.?\s*r(?:d|e)g\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)",
     r"present\s*reading\s*[:\-]?\s*(\d+(?:\.\d+)?)",
+    r"curr(?:ent)?\.?\s*r(?:d|e)g\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)",
+    r"current\s*reading\s*[:\-]?\s*(\d+(?:\.\d+)?)",
 ]
 PREVIOUS_READING_PATTERNS = [
     r"prev(?:ious)?\.?\s*r(?:d|e)g\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)",
