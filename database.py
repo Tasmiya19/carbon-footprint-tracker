@@ -78,6 +78,49 @@ def get_all_records(db_path: str = DB_PATH):
     return rows
 
 
+def get_records_for_user(user_name: str, db_path: str = DB_PATH):
+    """Return all records for one user, most recent first -- used for
+    month-over-month comparison and streak calculation."""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, user_name, electricity_units, carbon_emission, eco_score, recommendation, created_at "
+        "FROM ActivityData WHERE user_name = ? ORDER BY created_at DESC",
+        (user_name,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
+def get_leaderboard(db_path: str = DB_PATH, limit: int = 10):
+    """
+    Return each user's average eco-score and total points, ranked best
+    first. Points are simply the sum of eco-scores across all of that
+    user's entries -- a simple, transparent scoring model (more entries
+    with better scores earns more points), inspired by gamification
+    approaches in similar public carbon-tracking projects.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT user_name,
+               ROUND(AVG(eco_score), 1) AS avg_score,
+               SUM(eco_score) AS total_points,
+               COUNT(*) AS entry_count
+        FROM ActivityData
+        GROUP BY user_name
+        ORDER BY total_points DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
 if __name__ == "__main__":
     # Quick manual test: python database.py
     init_db()
