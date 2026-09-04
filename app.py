@@ -135,6 +135,47 @@ CUSTOM_CSS = """
         box-shadow: 0 2px 8px rgba(251,192,45,0.15);
     }
 
+    .badge-banner {
+        background: linear-gradient(135deg, #E8F5E9, #F1F8E9);
+        border: 1.5px solid #A5D6A7;
+        border-radius: 30px;
+        padding: 0.6rem 1.4rem;
+        font-size: 1.05rem;
+        margin: 0.8rem 0 1.2rem 0;
+        display: inline-block;
+        color: #1B5E20;
+    }
+
+    .leaderboard-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 0.5rem;
+        background: white;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+    }
+    .leaderboard-table th {
+        background: linear-gradient(135deg, #2E7D32, #43A047);
+        color: white;
+        padding: 0.7rem 1rem;
+        font-family: 'Poppins', sans-serif;
+        font-weight: 600;
+        text-align: left;
+        font-size: 0.9rem;
+    }
+    .leaderboard-table td {
+        padding: 0.65rem 1rem;
+        border-bottom: 1px solid #F0F0F0;
+        font-size: 0.92rem;
+    }
+    .leaderboard-table tr:last-child td {
+        border-bottom: none;
+    }
+    .leaderboard-table tr:hover td {
+        background-color: #F9FBE7;
+    }
+
     .coming-soon-box {
         background-color: #FAFAFA;
         border: 1.5px dashed #BDBDBD;
@@ -384,6 +425,7 @@ def render_history():
         best_score = int(df["Eco-Score"].max())
         avg_score = round(df["Eco-Score"].mean(), 1)
         streak = _calculate_good_score_streak(df)
+        badge_emoji, badge_name = _get_badge(streak, avg_score)
 
         s1, s2, s3 = st.columns(3)
         with s1:
@@ -392,6 +434,11 @@ def render_history():
             st.markdown(f"""<div class="metric-card"><p>📈 Average Eco-Score</p><h2>{avg_score}</h2></div>""", unsafe_allow_html=True)
         with s3:
             st.markdown(f"""<div class="metric-card"><p>🔥 Current Streak</p><h2>{streak}</h2></div>""", unsafe_allow_html=True)
+
+        st.markdown(
+            f"""<div class="badge-banner">{badge_emoji} <b>{badge_name}</b></div>""",
+            unsafe_allow_html=True,
+        )
 
         st.write("")
         st.dataframe(df, use_container_width=True, hide_index=True)
@@ -420,24 +467,56 @@ def _calculate_good_score_streak(df: pd.DataFrame) -> int:
     return streak
 
 
+def _get_badge(streak: int, avg_score: float):
+    """
+    A simple, transparent badge tier based on overall average score and
+    current streak -- purely for engagement/motivation, computed from
+    data already stored (no new input needed).
+    """
+    if avg_score >= 85 and streak >= 3:
+        return "🏆", "Eco Warrior"
+    elif avg_score >= 70:
+        return "🌳", "Eco Champion"
+    elif avg_score >= 50:
+        return "🌿", "Eco Aware"
+    else:
+        return "🌱", "Getting Started"
+
+
 def render_leaderboard():
     """
-    Simple leaderboard ranking users by total points (sum of their
-    eco-scores across all entries) -- inspired by gamification features
-    in similar public carbon-tracking projects (e.g. EcoTrackr, NAVIN).
-    More entries with better scores earns more points.
+    Leaderboard ranking users by total points (sum of their eco-scores
+    across all entries) -- inspired by gamification features in similar
+    public carbon-tracking projects (e.g. EcoTrackr, NAVIN). Top 3 get
+    medal icons; more entries with better scores earns more points.
     """
     st.markdown('<p class="section-title">🏅 Leaderboard</p>', unsafe_allow_html=True)
     leaderboard = get_leaderboard()
     if not leaderboard:
         return
 
-    leaderboard_df = pd.DataFrame(
-        leaderboard,
-        columns=["User", "Avg Eco-Score", "Total Points", "Entries"],
-    )
-    leaderboard_df.insert(0, "Rank", range(1, len(leaderboard_df) + 1))
-    st.dataframe(leaderboard_df, use_container_width=True, hide_index=True)
+    medals = ["🥇", "🥈", "🥉"]
+    rows_html = ""
+    for i, (user, avg_score, points, entries) in enumerate(leaderboard):
+        rank_display = medals[i] if i < 3 else f"#{i + 1}"
+        rows_html += f"""
+        <tr>
+            <td style="text-align:center; font-size:1.2rem;">{rank_display}</td>
+            <td><b>{user}</b></td>
+            <td style="text-align:center;">{avg_score}</td>
+            <td style="text-align:center;">{points}</td>
+            <td style="text-align:center;">{entries}</td>
+        </tr>"""
+
+    table_html = f"""
+    <table class="leaderboard-table">
+        <thead>
+            <tr><th>Rank</th><th>User</th><th>Avg Eco-Score</th><th>Points</th><th>Entries</th></tr>
+        </thead>
+        <tbody>{rows_html}</tbody>
+    </table>
+    """
+    st.markdown(table_html, unsafe_allow_html=True)
     st.caption("Points = sum of eco-scores across all your entries. Log more good-usage entries to climb the board.")
 
 
