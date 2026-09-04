@@ -25,7 +25,7 @@ import base64
 import time
 
 from carbon_calculator import build_result, EMISSION_FACTOR_KG_PER_KWH
-from database import init_db, save_record, get_all_records
+from database import init_db, save_record, get_all_records, get_records_for_user, get_leaderboard
 
 # OCR is optional -- app still works without Tesseract installed,
 # it just disables the "upload"/"live scan" input options.
@@ -320,6 +320,13 @@ def render_output(units_consumed: float, user_name: str):
     if st.button("🧮 Calculate Carbon Footprint", type="primary"):
         result = build_result(units_consumed)
         score = result["ecoScore"]
+        emission_value = float(result["carbonEmission"].split(" ")[0])
+
+        # Grab the user's previous entry (if any) BEFORE saving the new one,
+        # so we can show a "vs last time" comparison -- a simple trend
+        # indicator inspired by similar carbon-tracking apps' progress views.
+        previous_entries = get_records_for_user(user_name)
+        previous_emission = previous_entries[0][3] if previous_entries else None
 
         left_col, right_col = st.columns([1, 1])
 
@@ -344,7 +351,16 @@ def render_output(units_consumed: float, user_name: str):
             unsafe_allow_html=True,
         )
 
-        emission_value = float(result["carbonEmission"].split(" ")[0])
+        # Month-over-month / entry-over-entry comparison
+        if previous_emission is not None and previous_emission > 0:
+            change_pct = ((emission_value - previous_emission) / previous_emission) * 100
+            if change_pct < -1:
+                st.success(f"📉 Down {abs(change_pct):.0f}% from your last entry ({previous_emission} kg CO2) — nice work!")
+            elif change_pct > 1:
+                st.warning(f"📈 Up {change_pct:.0f}% from your last entry ({previous_emission} kg CO2).")
+            else:
+                st.info(f"➖ About the same as your last entry ({previous_emission} kg CO2).")
+
         save_record(
             user_name=user_name,
             electricity_units=units_consumed,
@@ -363,10 +379,66 @@ def render_history():
             records,
             columns=["ID", "User", "Units (kWh)", "Emission (kg CO2)", "Eco-Score", "Recommendation", "Date"],
         )
+
+        # Summary cards: best score so far, average this month, current streak
+        best_score = int(df["Eco-Score"].max())
+        avg_score = round(df["Eco-Score"].mean(), 1)
+        streak = _calculate_good_score_streak(df)
+
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            st.markdown(f"""<div class="metric-card"><p>🏆 Best Eco-Score</p><h2>{best_score}</h2></div>""", unsafe_allow_html=True)
+        with s2:
+            st.markdown(f"""<div class="metric-card"><p>📈 Average Eco-Score</p><h2>{avg_score}</h2></div>""", unsafe_allow_html=True)
+        with s3:
+            st.markdown(f"""<div class="metric-card"><p>🔥 Current Streak</p><h2>{streak}</h2></div>""", unsafe_allow_html=True)
+
+        st.write("")
         st.dataframe(df, use_container_width=True, hide_index=True)
         st.line_chart(df.set_index("Date")["Emission (kg CO2)"][::-1])
+
+        st.write("")
+        render_leaderboard()
     else:
         st.info("No records yet -- calculate your first footprint above.")
+
+
+def _calculate_good_score_streak(df: pd.DataFrame) -> int:
+    """
+    Count how many of the most recent entries (across all users, in
+    save order) have an eco-score of 75+ in a row. A simple, transparent
+    gamification signal -- inspired by streak features in similar
+    carbon-tracking apps -- computed purely from data already stored,
+    no extra input needed.
+    """
+    streak = 0
+    for score in df["Eco-Score"]:  # df is already most-recent-first
+        if score >= 75:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def render_leaderboard():
+    """
+    Simple leaderboard ranking users by total points (sum of their
+    eco-scores across all entries) -- inspired by gamification features
+    in similar public carbon-tracking projects (e.g. EcoTrackr, NAVIN).
+    More entries with better scores earns more points.
+    """
+    st.markdown('<p class="section-title">🏅 Leaderboard</p>', unsafe_allow_html=True)
+    leaderboard = get_leaderboard()
+    if not leaderboard:
+        return
+
+    leaderboard_df = pd.DataFrame(
+        leaderboard,
+        columns=["User", "Avg Eco-Score", "Total Points", "Entries"],
+    )
+    leaderboard_df.insert(0, "Rank", range(1, len(leaderboard_df) + 1))
+    st.dataframe(leaderboard_df, use_container_width=True, hide_index=True)
+    st.caption("Points = sum of eco-scores across all your entries. Log more good-usage entries to climb the board.")
 
 
 # ---------------------------------------------------------------------------
