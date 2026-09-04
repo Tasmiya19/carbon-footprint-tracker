@@ -1,356 +1,533 @@
 """
-ocr_parser.py
+app.py
 
-Extracts "units consumed" (kWh) from a photo/scan of an electricity
-bill using Tesseract OCR, plus regex rules to find the right number
-in the raw text.
+Main Streamlit application for the AI-Powered Carbon Footprint Tracker.
 
-Requirements:
-    pip install pytesseract pillow opencv-python
-    Also install the Tesseract OCR engine itself (system binary):
-        - Windows: https://github.com/UB-Mannheim/tesseract/wiki
-        - macOS:   brew install tesseract
-        - Linux:   sudo apt install tesseract-ocr
+Currently implements the Electricity Bill module end-to-end:
+    Input (manual / upload / live camera) -> OCR -> Carbon Calculation
+    -> Eco-Score & Recommendation -> Storage -> History Dashboard
 
-Bill layouts vary a lot between providers, so the regex patterns
-below are a starting point -- test against your own sample bills
-in data/sample_bills/ and add patterns as needed.
+The sidebar lists all modules from the project roadmap so new ones
+(Transportation, Fuel Usage, ML Prediction) can be dropped in later
+without restructuring the app -- each just needs its own
+`render_xxx_module()` function following the same pattern as
+`render_electricity_module()` below.
+
+Run with:
+    streamlit run app.py
 """
 
-import platform
-import re
-import cv2
-import pytesseract
-from PIL import Image
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+import tempfile
+import base64
+import time
 
-# On Windows, Tesseract isn't automatically on PATH after installing, so we
-# point pytesseract at the default install location. On Linux (e.g. Streamlit
-# Cloud, where packages.txt installs tesseract-ocr) and macOS (via Homebrew),
-# it's already on PATH, so we leave pytesseract to find it automatically.
-if platform.system() == "Windows":
-    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+from carbon_calculator import build_result, EMISSION_FACTOR_KG_PER_KWH
+from database import init_db, save_record, get_all_records
 
-
-# Common phrasings used on electricity bills for consumption, in order
-# of how likely they are to appear. Add more patterns as you test real bills.
-UNIT_PATTERNS = [
-    r"units\s*consumed\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-    r"total\s*units\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-    r"consumption\s*\(kwh\)\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-    r"kwh\s*consumed\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-    # Matches bills like "Consumption(Units)" or "Consumption (Units)" followed
-    # by the number on the same line or the line right after it.
-    r"consumption\s*\(\s*units?\s*\)\s*[:\-]?\s*\n?\s*(\d+(?:\.\d+)?)",
-    # Plain "Consumption : 4100" style, with no "(kWh)"/"(Units)" qualifier --
-    # common on bills that just label the field "Consumption".
-    r"consumption\s*[:\-]\s*(\d+(?:\.\d+)?)",
-    r"(\d+(?:\.\d+)?)\s*kwh",
-    # Fallback for tabular "Energy Charges (Unit, Rate, Amount)" bills where
-    # the units value sits alone on the next line, e.g.:
-    #   Energy Charges (Unit Rate, Amount)
-    #   141          4.15          585.15
-    r"energy\s*charges[^\n]*\n\s*([\d\]\)]{1,4})\s",
-    # Hindi-script bills (e.g. Madhya Pradesh, UP, Bihar) that label the
-    # field "कुल खपत" (total consumption) or just "खपत" (consumption).
-    r"कुल\s*खपत\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-    r"खपत\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-]
+# OCR is optional -- app still works without Tesseract installed,
+# it just disables the "upload"/"live scan" input options.
+try:
+    from ocr_parser import extract_units_consumed
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
 
 
-def _clean_ocr_digits(raw: str) -> str:
+# ---------------------------------------------------------------------------
+# Page setup & styling
+# ---------------------------------------------------------------------------
+
+st.set_page_config(
+    page_title="Carbon Footprint Tracker",
+    page_icon="🌱",
+    layout="wide",
+)
+init_db()
+
+CUSTOM_CSS = """
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+    }
+
+    /* Hide default Streamlit chrome for a cleaner "website" feel */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+
+    .block-container {
+        padding-top: 1.5rem;
+        max-width: 1100px;
+    }
+
+    /* Hero banner */
+    .hero-banner {
+        background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 45%, #66BB6A 100%);
+        border-radius: 18px;
+        padding: 2.2rem 2.5rem;
+        color: white;
+        margin-bottom: 1.8rem;
+        box-shadow: 0 8px 24px rgba(27, 94, 32, 0.25);
+    }
+    .hero-banner h1 {
+        font-family: 'Poppins', sans-serif;
+        font-size: 2.2rem;
+        font-weight: 700;
+        margin: 0 0 0.3rem 0;
+        color: white;
+    }
+    .hero-banner p {
+        font-size: 1.05rem;
+        margin: 0;
+        opacity: 0.92;
+    }
+
+    .section-title {
+        font-family: 'Poppins', sans-serif;
+        font-weight: 600;
+        color: #1B5E20;
+        font-size: 1.3rem;
+        margin-top: 0.5rem;
+        margin-bottom: 0.8rem;
+        border-left: 4px solid #66BB6A;
+        padding-left: 0.6rem;
+    }
+
+    /* Cards */
+    .metric-card {
+        background-color: #ffffff;
+        border-radius: 14px;
+        padding: 1.3rem 1.5rem;
+        text-align: center;
+        border: 1px solid #E0E0E0;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .metric-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 6px 18px rgba(46,125,50,0.15);
+    }
+    .metric-card h2 {
+        margin: 0.2rem 0 0 0;
+        color: #2E7D32;
+        font-family: 'Poppins', sans-serif;
+        font-size: 1.8rem;
+    }
+    .metric-card p {
+        margin: 0;
+        color: #757575;
+        font-size: 0.88rem;
+        font-weight: 500;
+    }
+
+    .recommendation-banner {
+        background: linear-gradient(135deg, #FFFDE7, #FFF8E1);
+        border-left: 5px solid #FBC02D;
+        padding: 1.1rem 1.4rem;
+        border-radius: 10px;
+        font-size: 1rem;
+        margin-top: 1.2rem;
+        box-shadow: 0 2px 8px rgba(251,192,45,0.15);
+    }
+
+    .coming-soon-box {
+        background-color: #FAFAFA;
+        border: 1.5px dashed #BDBDBD;
+        border-radius: 14px;
+        padding: 2.5rem;
+        text-align: center;
+        color: #757575;
+    }
+
+    /* Buttons */
+    div.stButton > button {
+        background: linear-gradient(135deg, #2E7D32, #43A047);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 0.55rem 1.4rem;
+        font-weight: 600;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    div.stButton > button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 14px rgba(46,125,50,0.35);
+        color: white;
+    }
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px 8px 0 0;
+        font-weight: 600;
+        padding: 0.6rem 1.2rem;
+    }
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background-color: #F1F8E9;
+    }
+
+    .footer-note {
+        text-align: center;
+        color: #9E9E9E;
+        font-size: 0.8rem;
+        margin-top: 2.5rem;
+        padding-top: 1rem;
+        border-top: 1px solid #E0E0E0;
+    }
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+def render_hero(title: str, subtitle: str):
+    st.markdown(
+        f"""<div class="hero-banner"><h1>{title}</h1><p>{subtitle}</p></div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_footer():
+    st.markdown(
+        '<div class="footer-note">AI-Powered Carbon Footprint Tracking & Reduction System · Major Project</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+def eco_score_color(score: int) -> str:
+    if score >= 75:
+        return "#2E7D32"   # green
+    elif score >= 50:
+        return "#F9A825"   # amber
+    else:
+        return "#C62828"   # red
+
+
+def render_eco_gauge(score: int):
+    """Render a circular gauge for the eco-score using Plotly (looks much better on screen than a plain progress bar)."""
+    color = eco_score_color(score)
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=score,
+            number={"suffix": " / 100", "font": {"size": 34}},
+            gauge={
+                "axis": {"range": [0, 100], "tickwidth": 1},
+                "bar": {"color": color},
+                "steps": [
+                    {"range": [0, 50], "color": "#FFEBEE"},
+                    {"range": [50, 75], "color": "#FFF8E1"},
+                    {"range": [75, 100], "color": "#E8F5E9"},
+                ],
+            },
+            title={"text": "Eco-Score", "font": {"size": 18}},
+        )
+    )
+    fig.update_layout(height=260, margin=dict(l=20, r=20, t=50, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def show_scanning_animation(image_bytes: bytes, seconds: float = 2.0):
     """
-    Tesseract commonly misreads the digit '1' as ']' or ')' in noisy scans
-    (e.g. "141" -> "14]"). Undo that specific, common substitution before
-    converting to a number.
+    Display the captured/uploaded image with an animated horizontal
+    scan-line sweeping over it, like a real document scanner, for a
+    short moment before showing the OCR result. Purely visual --
+    doesn't affect the actual OCR logic.
     """
-    return raw.replace("]", "1").replace(")", "1")
-
-
-def extract_units_from_text(text: str):
+    encoded = base64.b64encode(image_bytes).decode()
+    scanner_html = f"""
+    <div style="position:relative; width:280px; margin:auto; overflow:hidden;
+                border-radius:8px; border:2px solid #2E7D32;">
+        <img src="data:image/jpeg;base64,{encoded}" style="width:100%; display:block;">
+        <div style="position:absolute; left:0; width:100%; height:4px;
+                    background:linear-gradient(90deg, rgba(46,125,50,0) 0%, #66BB6A 50%, rgba(46,125,50,0) 100%);
+                    box-shadow:0 0 8px 2px #66BB6A;
+                    animation: scanSweep {seconds}s ease-in-out infinite;"></div>
+    </div>
+    <style>
+        @keyframes scanSweep {{
+            0%   {{ top: 0%; }}
+            50%  {{ top: 96%; }}
+            100% {{ top: 0%; }}
+        }}
+    </style>
     """
-    Given already-extracted OCR text, try each pattern in turn.
-    Split out from extract_units_consumed() so it can be tested/reused
-    without needing an actual image file.
+    placeholder = st.empty()
+    placeholder.markdown(scanner_html, unsafe_allow_html=True)
+    with st.spinner("🔍 Scanning bill..."):
+        time.sleep(seconds)
+    placeholder.empty()
+
+
+def run_ocr_on_bytes(image_bytes: bytes, caption: str, key_prefix: str):
     """
-    text_lower = text.lower()
-    for pattern in UNIT_PATTERNS:
-        match = re.search(pattern, text_lower)
-        if match:
-            cleaned = _clean_ocr_digits(match.group(1))
-            try:
-                return float(cleaned)
-            except ValueError:
-                continue  # this match wasn't actually numeric after cleanup, try next pattern
-    return None
+    Save uploaded/captured image bytes to a temp file, run OCR (with a
+    scanning animation shown first), and return the extracted units.
 
-
-# Patterns for the "Present Reading" and "Previous Reading" meter values.
-# Almost every Indian electricity bill (regardless of state/provider or
-# exact wording for "consumption") prints these two numbers, since they're
-# what the meter reader actually recorded -- so calculating their
-# difference is a very reliable, provider-independent way to get units
-# consumed, even when the bill's specific "Consumption" label/phrasing
-# isn't one we've coded a pattern for.
-PRESENT_READING_PATTERNS = [
-    r"pres(?:ent)?\.?\s*r(?:d|e)g\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-    r"present\s*reading\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-    r"curr(?:ent)?\.?\s*r(?:d|e)g\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-    r"current\s*reading\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-    # Hindi: "वर्तमान रीडिंग" (current/present reading)
-    r"वर्तमान\s*रीडिंग\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-]
-PREVIOUS_READING_PATTERNS = [
-    r"prev(?:ious)?\.?\s*r(?:d|e)g\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-    r"previous\s*reading\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-    # Hindi: "पिछली रीडिंग" (previous reading)
-    r"पिछली\s*रीडिंग\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-]
-CONSTANT_PATTERNS = [
-    r"constant\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-    r"m(?:eter)?\.?\s*constant\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-    # Hindi: "गुणांक" (multiplier/constant)
-    r"गुणांक\s*[:\-]?\s*(\d+(?:\.\d+)?)",
-]
-
-
-def _first_match(patterns: list, text_lower: str):
-    for pattern in patterns:
-        match = re.search(pattern, text_lower)
-        if match:
-            cleaned = _clean_ocr_digits(match.group(1))
-            try:
-                return float(cleaned)
-            except ValueError:
-                continue
-    return None
-
-
-def extract_units_from_meter_readings(text: str):
+    If no known bill pattern matched, but OCR still found plausible
+    numbers on the bill, the user is shown those numbers to pick from
+    -- instead of the system just giving up -- so it works reasonably
+    well across bill layouts we haven't specifically coded for.
     """
-    Provider-independent fallback: units consumed = (present reading -
-    previous reading) x meter constant (constant defaults to 1 if not
-    found/printed). Validated against multiple real Indian bill formats
-    where the direct "Consumption" label wasn't reliably OCR'd, but the
-    Present/Previous Reading numbers were.
-    """
-    text_lower = text.lower()
-    present = _first_match(PRESENT_READING_PATTERNS, text_lower)
-    previous = _first_match(PREVIOUS_READING_PATTERNS, text_lower)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+        tmp.write(image_bytes)
+        tmp_path = tmp.name
 
-    if present is None or previous is None:
+    show_scanning_animation(image_bytes)
+
+    units, candidates = extract_units_consumed(tmp_path)
+
+    st.image(image_bytes, caption=caption, width=280)
+
+    if units is not None:
+        st.success(f"✅ OCR detected **{units} units** consumed.")
+        return units
+
+    if candidates:
+        st.info(
+            "Couldn't automatically identify the exact field, but found these numbers "
+            "on the bill. Select the correct **units consumed** value:"
+        )
+        choice = st.selectbox(
+            "Detected numbers",
+            options=["-- select --"] + candidates,
+            key=f"{key_prefix}_candidates",
+        )
+        if choice != "-- select --":
+            return float(choice)
         return None
 
-    constant = _first_match(CONSTANT_PATTERNS, text_lower)
-    if constant is None or constant <= 0:
-        constant = 1.0
-
-    diff = (present - previous) * constant
-    if diff < 0:
-        return None  # reading rollover / OCR error -- not trustworthy, don't guess
-
-    return round(diff, 2)
+    st.warning("⚠️ Couldn't automatically read this bill. Please enter manually.")
+    return None
 
 
-def preprocess_image(image_path: str):
-    """
-    Basic preprocessing to improve OCR accuracy: grayscale + thresholding.
-    Returns a PIL Image ready for pytesseract. Kept for backwards
-    compatibility / simple single-pass use.
-    """
-    img = cv2.imread(image_path)
-    if img is None:
-        raise FileNotFoundError(f"Could not read image: {image_path}")
+def render_output(units_consumed: float, user_name: str):
+    """Render the styled Step 2 output: metric cards, eco-score, recommendation, save to DB."""
+    st.subheader("Step 2: Output")
 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # Otsu's thresholding -- turns the image into clean black/white text
-    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if st.button("🧮 Calculate Carbon Footprint", type="primary"):
+        result = build_result(units_consumed)
+        score = result["ecoScore"]
 
-    return Image.fromarray(thresh)
+        left_col, right_col = st.columns([1, 1])
 
+        with left_col:
+            st.markdown(
+                f"""<div class="metric-card"><p>⚡ Units Consumed</p>
+                <h2>{units_consumed}</h2></div>""",
+                unsafe_allow_html=True,
+            )
+            st.write("")
+            st.markdown(
+                f"""<div class="metric-card"><p>🌍 Carbon Emission</p>
+                <h2>{result['carbonEmission']}</h2></div>""",
+                unsafe_allow_html=True,
+            )
 
-def _generate_preprocessing_variants(image_path: str):
-    """
-    Produce a couple of differently-processed versions of the same image.
-    Different bill photos respond better to different treatment (blurry,
-    low-contrast, uneven lighting), so instead of a single fixed pipeline,
-    we try a small number and let OCR run on each. Kept intentionally
-    small (2 variants) so the total OCR time stays reasonable for a live
-    demo -- more variants catch more edge cases but get slow fast.
-    Returns a list of PIL Images.
-    """
-    img = cv2.imread(image_path)
-    if img is None:
-        raise FileNotFoundError(f"Could not read image: {image_path}")
+        with right_col:
+            render_eco_gauge(score)
 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        st.markdown(
+            f"""<div class="recommendation-banner">💡 <b>Recommendation:</b> {result['recommendation']}</div>""",
+            unsafe_allow_html=True,
+        )
 
-    # Upscale small/low-res photos -- OCR struggles with small text.
-    # Capped at 1400px (rather than higher) to keep OCR time reasonable.
-    h, w = gray.shape
-    if max(h, w) < 1400:
-        scale = 1400 / max(h, w)
-        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-
-    variants = []
-
-    # Variant 1: contrast boost (CLAHE) + Otsu threshold -- handles most
-    # everyday cases: mild blur, faded print, moderate lighting issues.
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    contrast_boosted = clahe.apply(gray)
-    _, otsu = cv2.threshold(contrast_boosted, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    variants.append(Image.fromarray(otsu))
-
-    # Variant 2: adaptive thresholding -- handles uneven lighting/shadows/
-    # folded paper, which Otsu alone often struggles with.
-    adaptive = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11
-    )
-    variants.append(Image.fromarray(adaptive))
-
-    return variants
+        emission_value = float(result["carbonEmission"].split(" ")[0])
+        save_record(
+            user_name=user_name,
+            electricity_units=units_consumed,
+            carbon_emission_kg=emission_value,
+            eco_score=score,
+            recommendation=result["recommendation"],
+        )
+        st.toast("Saved to your history!")
 
 
-def extract_raw_text(image_path: str) -> str:
-    """
-    Run OCR on a bill image and return the raw extracted text using a
-    single, simple preprocessing pass. Kept for quick debugging
-    (e.g. `python ocr_parser.py <image>`), where seeing one clear
-    output is more useful than a merged multi-pass result.
-
-    Uses English + Hindi language data when available -- many Indian
-    electricity bills (e.g. Madhya Pradesh, UP, Bihar, Rajasthan) print
-    field labels in Hindi/Devanagari script, which English-only OCR
-    can't read at all and which corrupts nearby number recognition too.
-    Falls back to English-only automatically if the Hindi language pack
-    isn't installed, so this doesn't break setups that haven't added it.
-    """
-    processed = preprocess_image(image_path)
-    try:
-        return pytesseract.image_to_string(processed, lang="eng+hin+kan+tam+tel+mar+ben+guj")
-    except pytesseract.TesseractError:
-        return pytesseract.image_to_string(processed)  # regional packs not installed -- fall back
-
-
-def extract_raw_text_multi(image_path: str) -> str:
-    """
-    Run OCR across a couple of preprocessing variants and Tesseract page
-    segmentation modes, then combine all the text together. Running a
-    few attempts and merging catches cases where one specific variant
-    misses text that another reads correctly -- more robust on unclear
-    real-world bill photos than a single pass, while staying fast enough
-    (2 variants x 2 configs = 4 passes) for a live demo.
-    """
-    variants = _generate_preprocessing_variants(image_path)
-    psm_configs = ["--psm 6", "--psm 11"]  # different layout assumptions
-
-    all_text = []
-    for variant in variants:
-        for config in psm_configs:
-            try:
-                text = pytesseract.image_to_string(variant, lang="eng+hin+kan+tam+tel+mar+ben+guj", config=config)
-            except pytesseract.TesseractError:
-                try:
-                    text = pytesseract.image_to_string(variant, config=config)  # regional packs not installed
-                except Exception:
-                    continue
-            except Exception:
-                continue  # skip a failed pass, keep trying others
-            if text.strip():
-                all_text.append(text)
-
-    return "\n".join(all_text)
-
-
-def extract_all_candidate_numbers(text: str) -> list:
-    """
-    Fallback for when no specific pattern matches (bill layout not
-    covered by UNIT_PATTERNS). Prioritizes numbers found near
-    consumption-related keywords (much more likely to be the right
-    value), then fills in with other plausible numbers on the bill.
-    Typical household electricity consumption is between 1 and 2000
-    units. Capped at 10 candidates so the dropdown stays usable.
-    """
-    cleaned_text = _clean_ocr_digits(text)
-    lines = cleaned_text.lower().split("\n")
-
-    keywords = ["consumption", "energy charge", "units", "kwh", "consumed"]
-
-    priority_numbers = []
-    other_numbers = []
-    seen = set()
-
-    for line in lines:
-        numbers_in_line = re.findall(r"\d+(?:\.\d+)?", line)
-        is_priority_line = any(kw in line for kw in keywords)
-        for raw in numbers_in_line:
-            value = float(raw)
-            # Wide range: covers both small household bills and larger
-            # commercial/industrial connections. Excludes only clearly
-            # implausible values (e.g. huge bill-amount or barcode numbers).
-            if 1 <= value <= 100000 and value not in seen:
-                seen.add(value)
-                (priority_numbers if is_priority_line else other_numbers).append(value)
-
-    ordered = priority_numbers + other_numbers
-    return ordered[:10]
-
-
-def extract_units_consumed(image_path: str):
-    """
-    Extract the electricity units consumed (kWh) from a bill image.
-
-    Strategy (fast path first, escalating only if needed):
-        1. Try a single fast preprocessing pass -- works well for most
-           clear, well-lit bill photos and keeps the app responsive.
-        2. If that finds nothing, retry with several preprocessing
-           variants + OCR configs combined -- slower, but catches more
-           on blurry/uneven-lighting photos the fast pass misses.
-        3. If a known pattern still doesn't match, fall back to a
-           prioritized list of candidate numbers for the user to pick.
-
-    Returns a tuple: (units_or_none, candidates)
-        - If a known pattern matched: (units, [])
-        - If nothing matched but numbers were found: (None, [list of candidate numbers])
-        - If OCR found nothing usable at all: (None, [])
-    """
-    fast_text = extract_raw_text(image_path)
-    units = extract_units_from_text(fast_text)
-    if units is not None:
-        return units, []
-
-    # Try the provider-independent meter-reading-difference method before
-    # escalating to slower multi-pass OCR -- cheap to check, and often
-    # works even when the direct "Consumption" label wasn't matched.
-    units = extract_units_from_meter_readings(fast_text)
-    if units is not None:
-        return units, []
-
-    thorough_text = extract_raw_text_multi(image_path)
-    units = extract_units_from_text(thorough_text)
-    if units is not None:
-        return units, []
-
-    units = extract_units_from_meter_readings(thorough_text)
-    if units is not None:
-        return units, []
-
-    combined_text = fast_text + "\n" + thorough_text
-    return None, extract_all_candidate_numbers(combined_text)
-
-
-if __name__ == "__main__":
-    # Quick manual test:
-    #   python ocr_parser.py data/sample_bills/bill1.jpg
-    import sys
-
-    if len(sys.argv) < 2:
-        print("Usage: python ocr_parser.py <path_to_bill_image>")
+def render_history():
+    st.subheader("📊 Your History")
+    records = get_all_records()
+    if records:
+        df = pd.DataFrame(
+            records,
+            columns=["ID", "User", "Units (kWh)", "Emission (kg CO2)", "Eco-Score", "Recommendation", "Date"],
+        )
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.line_chart(df.set_index("Date")["Emission (kg CO2)"][::-1])
     else:
-        path = sys.argv[1]
-        print("--- Raw OCR text ---")
-        print(extract_raw_text(path))
-        print("--- Extracted units ---")
-        units, candidates = extract_units_consumed(path)
-        print(units)
-        print("--- Candidate numbers (if no direct match) ---")
-        print(candidates)
+        st.info("No records yet -- calculate your first footprint above.")
+
+
+# ---------------------------------------------------------------------------
+# Electricity Bill module (fully implemented)
+# ---------------------------------------------------------------------------
+
+def render_electricity_module():
+    render_hero(
+        "🌱 AI-Powered Carbon Footprint Tracker",
+        "Electricity Bill Module — Input to Output Pipeline",
+    )
+
+    tab_overview, tab_demo, tab_history = st.tabs(["📋 Overview", "🧪 Try It Live", "📊 History"])
+
+    with tab_overview:
+        render_overview()
+
+    with tab_demo:
+        render_demo()
+
+    with tab_history:
+        render_history()
+
+    render_footer()
+
+
+def render_overview():
+    st.markdown('<p class="section-title">How this module works</p>', unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4)
+    steps = [
+        ("📄", "1. Input", "Bill photo, live camera scan, or manual entry"),
+        ("🔍", "2. OCR Extraction", "Units consumed (kWh) is read automatically"),
+        ("🧮", "3. Calculation", "Units × emission factor → kg CO2 emitted"),
+        ("📊", "4. Output", "Emission, eco-score & a personalized tip"),
+    ]
+    for col, (icon, title, desc) in zip([c1, c2, c3, c4], steps):
+        with col:
+            st.markdown(
+                f"""<div class="metric-card" style="min-height:150px;">
+                <div style="font-size:2rem;">{icon}</div>
+                <p style="font-weight:600; color:#2E7D32;">{title}</p>
+                <p style="font-size:0.85rem;">{desc}</p></div>""",
+                unsafe_allow_html=True,
+            )
+
+    st.write("")
+    st.info(
+        f"**Formula used:** Carbon Emission (kg CO2) = Units Consumed (kWh) × "
+        f"{EMISSION_FACTOR_KG_PER_KWH} kg CO2/kWh"
+    )
+    st.caption(
+        "This module works fully offline from any dataset -- OCR uses a pretrained engine, "
+        "and the calculation is formula/rule-based. A dataset is only needed later, for the "
+        "upcoming ML Prediction module."
+    )
+
+
+def render_demo():
+    user_name = st.text_input("Your name", value="Guest")
+
+    st.markdown('<p class="section-title">Step 1: Provide your electricity usage</p>', unsafe_allow_html=True)
+
+    input_mode = st.radio(
+        "How would you like to provide your data?",
+        [
+            "Enter units manually",
+            "Upload electricity bill image (OCR)",
+            "Scan live using camera (OCR)",
+        ],
+        horizontal=True,
+    )
+
+    units_consumed = None
+
+    if input_mode == "Enter units manually":
+        units_consumed = st.number_input("Electricity units consumed (kWh)", min_value=0.0, step=1.0)
+
+    elif input_mode == "Upload electricity bill image (OCR)":
+        if not OCR_AVAILABLE:
+            st.warning(
+                "OCR dependencies (pytesseract / opencv-python) or the Tesseract "
+                "engine aren't installed. Falling back to manual entry below."
+            )
+            units_consumed = st.number_input("Electricity units consumed (kWh)", min_value=0.0, step=1.0)
+        else:
+            uploaded_file = st.file_uploader("Upload a photo/scan of your bill", type=["jpg", "jpeg", "png"])
+            if uploaded_file is not None:
+                extracted = run_ocr_on_bytes(uploaded_file.read(), "Uploaded bill", key_prefix="upload")
+                units_consumed = extracted if extracted is not None else st.number_input(
+                    "Electricity units consumed (kWh)", min_value=0.0, step=1.0
+                )
+
+    else:  # Scan live using camera (OCR)
+        if not OCR_AVAILABLE:
+            st.warning(
+                "OCR dependencies (pytesseract / opencv-python) or the Tesseract "
+                "engine aren't installed. Falling back to manual entry below."
+            )
+            units_consumed = st.number_input("Electricity units consumed (kWh)", min_value=0.0, step=1.0)
+        else:
+            st.caption("Point your camera at the full bill, keep it flat and well-lit, then click Take Photo.")
+            camera_image = st.camera_input("Scan your electricity bill")
+            if camera_image is not None:
+                extracted = run_ocr_on_bytes(camera_image.getvalue(), "Live-scanned bill", key_prefix="camera")
+                units_consumed = extracted if extracted is not None else st.number_input(
+                    "Electricity units consumed (kWh)", min_value=0.0, step=1.0
+                )
+
+    st.caption(f"Emission factor used: {EMISSION_FACTOR_KG_PER_KWH} kg CO2 per kWh")
+
+    if units_consumed is not None and units_consumed >= 0:
+        render_output(units_consumed, user_name)
+
+
+# ---------------------------------------------------------------------------
+# Placeholder modules -- from the project roadmap, not built yet.
+# Replace each render_xxx_placeholder() call with a real render_xxx_module()
+# function (same pattern as electricity above) as each module is built.
+# ---------------------------------------------------------------------------
+
+def render_placeholder(title: str, description: str):
+    render_hero(title, "Coming Soon")
+    st.markdown(
+        f"""<div class="coming-soon-box">🚧<br><br>{description}<br><br>
+        <i>Planned for a future release of this project.</i></div>""",
+        unsafe_allow_html=True,
+    )
+    render_footer()
+
+
+# ---------------------------------------------------------------------------
+# Sidebar navigation across all planned modules
+# ---------------------------------------------------------------------------
+
+st.sidebar.title("🌍 Carbon Tracker")
+st.sidebar.caption("AI-Powered Carbon Footprint Tracking & Reduction System")
+
+module = st.sidebar.radio(
+    "Modules",
+    [
+        "⚡ Electricity Bill",
+        "🚗 Transportation (GPS)",
+        "⛽ Fuel Usage",
+        "🔮 ML Emission Prediction",
+    ],
+)
+
+st.sidebar.divider()
+st.sidebar.caption("Project Status")
+st.sidebar.markdown(
+    "- ✅ Electricity Bill Module\n"
+    "- 🚧 Transportation Module\n"
+    "- 🚧 Fuel Usage Module\n"
+    "- 🚧 ML Prediction Module"
+)
+
+if module == "⚡ Electricity Bill":
+    render_electricity_module()
+elif module == "🚗 Transportation (GPS)":
+    render_placeholder("🚗 Transportation Module", "GPS-based travel tracking to calculate transportation emissions.")
+elif module == "⛽ Fuel Usage":
+    render_placeholder("⛽ Fuel Usage Module", "Track fuel consumption and its associated carbon emissions.")
+else:
+    render_placeholder("🔮 ML Emission Prediction", "Machine learning models to forecast future carbon emissions based on usage history.")
