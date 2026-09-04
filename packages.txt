@@ -1,9 +1,4 @@
 tesseract-ocr
 tesseract-ocr-hin
 tesseract-ocr-kan
-tesseract-ocr-tam
-tesseract-ocr-tel
-tesseract-ocr-mar
-tesseract-ocr-ben
-tesseract-ocr-guj
 libgl1
