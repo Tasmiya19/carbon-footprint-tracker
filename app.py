@@ -701,11 +701,116 @@ def render_placeholder(title: str, description: str):
 # ---------------------------------------------------------------------------
 
 def render_login_page():
+    if st.session_state.get("show_auth"):
+        render_auth_forms()
+        return
+
+    # ---- Hero section ----
+    st.markdown(
+        """<div class="hero-banner" style="text-align:center; padding:3rem 2rem;">
+        <div style="font-size:3rem;">🌱</div>
+        <h1 style="font-size:2.6rem;">Track. Reduce. Compete.</h1>
+        <p style="font-size:1.15rem; max-width:600px; margin:0.8rem auto 0 auto;">
+        Turn your electricity bill into a carbon footprint score in seconds --
+        powered by AI bill scanning, instant insights, and a leaderboard that
+        makes going green a little more fun.</p>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("Get Started Free", type="primary", use_container_width=True):
+                st.session_state.show_auth = True
+                st.session_state.auth_default_tab = "Sign Up"
+                st.rerun()
+        with b2:
+            if st.button("Log In", use_container_width=True):
+                st.session_state.show_auth = True
+                st.session_state.auth_default_tab = "Log In"
+                st.rerun()
+
+    st.write("")
+    st.write("")
+
+    # ---- How it works ----
+    st.markdown('<p class="section-title" style="text-align:center; border:none;">How It Works</p>', unsafe_allow_html=True)
+    steps = [
+        ("📄", "1. Scan Your Bill", "Upload a photo or scan it live -- no manual typing needed"),
+        ("🧮", "2. Instant Calculation", "Get your carbon emission, eco-score, and a tip in seconds"),
+        ("🏆", "3. Track & Compete", "Build a streak, earn badges, and climb the leaderboard"),
+    ]
+    cols = st.columns(3)
+    for col, (icon, title, desc) in zip(cols, steps):
+        with col:
+            st.markdown(
+                f"""<div class="metric-card" style="min-height:170px;">
+                <div style="font-size:2.2rem;">{icon}</div>
+                <p style="font-weight:600; color:#2E7D32; margin-top:0.5rem;">{title}</p>
+                <p style="font-size:0.88rem; color:#616161;">{desc}</p></div>""",
+                unsafe_allow_html=True,
+            )
+
+    st.write("")
+    st.write("")
+
+    # ---- Features ----
+    st.markdown('<p class="section-title" style="text-align:center; border:none;">Why Carbon Tracker</p>', unsafe_allow_html=True)
+    features = [
+        ("🔍", "AI-Powered OCR", "Reads your bill automatically, even bilingual formats"),
+        ("⚡", "Real-Time Results", "Emissions, eco-score, and tips generated instantly"),
+        ("🎮", "Gamified Tracking", "Streaks, badges, and a leaderboard keep you motivated"),
+        ("🔒", "Secure Login", "Your data is tied to your own account, not shared"),
+    ]
+    cols = st.columns(4)
+    for col, (icon, title, desc) in zip(cols, features):
+        with col:
+            st.markdown(
+                f"""<div class="metric-card" style="min-height:160px;">
+                <div style="font-size:1.8rem;">{icon}</div>
+                <p style="font-weight:600; color:#2E7D32; margin-top:0.4rem; font-size:0.95rem;">{title}</p>
+                <p style="font-size:0.82rem; color:#616161;">{desc}</p></div>""",
+                unsafe_allow_html=True,
+            )
+
+    st.write("")
+    st.write("")
+
+    # ---- Bottom CTA ----
+    st.markdown(
+        """<div class="recommendation-banner" style="text-align:center; background:linear-gradient(135deg,#E8F5E9,#F1F8E9); border-left:none;">
+        <h3 style="margin:0 0 0.5rem 0; color:#1B5E20;">Ready to see your footprint?</h3>
+        <p style="margin:0;">Create a free account and log your first bill in under a minute.</p>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+    st.write("")
+    _, mid, _ = st.columns([1, 1, 1])
+    with mid:
+        if st.button("Create My Free Account", type="primary", use_container_width=True, key="bottom_cta"):
+            st.session_state.show_auth = True
+            st.session_state.auth_default_tab = "Sign Up"
+            st.rerun()
+
+    render_footer()
+
+
+def render_auth_forms():
+    if st.button("← Back to home"):
+        st.session_state.show_auth = False
+        st.rerun()
+
     render_hero("🌱 Carbon Footprint Tracker", "Sign in to track your footprint and climb the leaderboard")
 
-    login_tab, signup_tab = st.tabs(["Log In", "Sign Up"])
+    default_tab = st.session_state.get("auth_default_tab", "Log In")
+    tab_labels = ["Log In", "Sign Up"] if default_tab == "Log In" else ["Sign Up", "Log In"]
+    tab_a, tab_b = st.tabs(tab_labels)
 
-    with login_tab:
+    tabs_by_label = {tab_labels[0]: tab_a, tab_labels[1]: tab_b}
+
+    with tabs_by_label["Log In"]:
         with st.form("login_form"):
             username = st.text_input("Username", key="login_username")
             password = st.text_input("Password", type="password", key="login_password")
@@ -714,11 +819,12 @@ def render_login_page():
                 if verify_user(username, password):
                     st.session_state.logged_in = True
                     st.session_state.username = username
+                    st.session_state.show_auth = False
                     st.rerun()
                 else:
                     st.error("Incorrect username or password.")
 
-    with signup_tab:
+    with tabs_by_label["Sign Up"]:
         with st.form("signup_form"):
             new_username = st.text_input("Choose a username", key="signup_username")
             new_password = st.text_input("Choose a password", type="password", key="signup_password")
