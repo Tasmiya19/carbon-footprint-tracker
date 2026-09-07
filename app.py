@@ -25,7 +25,7 @@ import base64
 import time
 
 from carbon_calculator import build_result, EMISSION_FACTOR_KG_PER_KWH
-from database import init_db, save_record, get_all_records, get_records_for_user, get_leaderboard
+from database import init_db, save_record, get_all_records, get_records_for_user, get_leaderboard, create_user, verify_user
 
 # OCR is optional -- app still works without Tesseract installed,
 # it just disables the "upload"/"live scan" input options.
@@ -576,7 +576,8 @@ def render_overview():
 
 
 def render_demo():
-    user_name = st.text_input("Your name", value="Guest")
+    user_name = st.session_state.get("username", "Guest")
+    st.caption(f"Logged in as **{user_name}**")
 
     st.markdown('<p class="section-title">Step 1: Provide your electricity usage</p>', unsafe_allow_html=True)
 
@@ -649,11 +650,68 @@ def render_placeholder(title: str, description: str):
 
 
 # ---------------------------------------------------------------------------
+# Login / Signup gate
+# ---------------------------------------------------------------------------
+
+def render_login_page():
+    render_hero("🌱 Carbon Footprint Tracker", "Sign in to track your footprint and climb the leaderboard")
+
+    login_tab, signup_tab = st.tabs(["Log In", "Sign Up"])
+
+    with login_tab:
+        with st.form("login_form"):
+            username = st.text_input("Username", key="login_username")
+            password = st.text_input("Password", type="password", key="login_password")
+            submitted = st.form_submit_button("Log In", type="primary")
+            if submitted:
+                if verify_user(username, password):
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.rerun()
+                else:
+                    st.error("Incorrect username or password.")
+
+    with signup_tab:
+        with st.form("signup_form"):
+            new_username = st.text_input("Choose a username", key="signup_username")
+            new_password = st.text_input("Choose a password", type="password", key="signup_password")
+            confirm_password = st.text_input("Confirm password", type="password", key="signup_confirm")
+            submitted = st.form_submit_button("Create Account", type="primary")
+            if submitted:
+                if not new_username or not new_password:
+                    st.error("Username and password can't be empty.")
+                elif new_password != confirm_password:
+                    st.error("Passwords don't match.")
+                elif create_user(new_username, new_password):
+                    st.success("Account created! Please log in from the Log In tab.")
+                else:
+                    st.error("That username is already taken.")
+
+    render_footer()
+
+
+# ---------------------------------------------------------------------------
 # Sidebar navigation across all planned modules
 # ---------------------------------------------------------------------------
 
+init_db()
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if not st.session_state.logged_in:
+    render_login_page()
+    st.stop()
+
 st.sidebar.title("🌍 Carbon Tracker")
 st.sidebar.caption("AI-Powered Carbon Footprint Tracking & Reduction System")
+st.sidebar.markdown(f"👋 Logged in as **{st.session_state.username}**")
+if st.sidebar.button("Log Out"):
+    st.session_state.logged_in = False
+    st.session_state.pop("username", None)
+    st.rerun()
+
+st.sidebar.divider()
 
 module = st.sidebar.radio(
     "Modules",
