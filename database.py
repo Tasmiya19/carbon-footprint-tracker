@@ -4,16 +4,26 @@ database.py
 Simple SQLite storage matching the ActivityData table described in
 the project report's database schema. No external DB server needed --
 SQLite stores everything in a single local file (carbon_tracker.db).
+Also includes a simple Users table for login/signup.
 """
 
 import sqlite3
+import hashlib
 from datetime import datetime
 
 DB_PATH = "carbon_tracker.db"
 
 
+def _hash_password(password: str) -> str:
+    """Simple SHA-256 hash -- never store plain-text passwords, even in
+    a student project. (For a production system you'd use a slower,
+    salted algorithm like bcrypt, but this is a reasonable baseline
+    improvement over storing passwords as-is.)"""
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
 def init_db(db_path: str = DB_PATH) -> None:
-    """Create the ActivityData table if it doesn't already exist."""
+    """Create the ActivityData and Users tables if they don't already exist."""
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute(
@@ -29,8 +39,49 @@ def init_db(db_path: str = DB_PATH) -> None:
         )
         """
     )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS Users (
+            username TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     conn.close()
+
+
+def create_user(username: str, password: str, db_path: str = DB_PATH) -> bool:
+    """
+    Create a new user account. Returns True on success, False if the
+    username is already taken.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO Users (username, password_hash, created_at) VALUES (?, ?, ?)",
+            (username, _hash_password(password), datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False  # username already exists
+    finally:
+        conn.close()
+
+
+def verify_user(username: str, password: str, db_path: str = DB_PATH) -> bool:
+    """Check a login attempt against the stored password hash."""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT password_hash FROM Users WHERE username = ?", (username,))
+    row = cursor.fetchone()
+    conn.close()
+    if row is None:
+        return False
+    return row[0] == _hash_password(password)
 
 
 def save_record(
