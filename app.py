@@ -25,7 +25,7 @@ import base64
 import time
 
 from carbon_calculator import build_result, EMISSION_FACTOR_KG_PER_KWH
-from database import init_db, save_record, get_all_records, get_records_for_user, get_leaderboard, create_user, verify_user
+from database import init_db, save_record, get_all_records, get_records_for_user, get_leaderboard, create_user, verify_user, get_user_joined_date
 
 # OCR is optional -- app still works without Tesseract installed,
 # it just disables the "upload"/"live scan" input options.
@@ -224,6 +224,50 @@ CUSTOM_CSS = """
         padding-top: 1rem;
         border-top: 1px solid #E0E0E0;
     }
+    .footer-links {
+        color: #66BB6A;
+    }
+
+    /* Top nav bar (styled radio, horizontal) */
+    div[data-testid="stRadio"] > div[role="radiogroup"] {
+        display: flex;
+        gap: 0.3rem;
+        background: white;
+        padding: 0.4rem;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        margin-bottom: 1.2rem;
+    }
+    div[data-testid="stRadio"] label {
+        border-radius: 8px;
+        padding: 0.4rem 0.9rem !important;
+        font-weight: 500;
+        transition: background 0.15s ease;
+    }
+    div[data-testid="stRadio"] label:hover {
+        background-color: #F1F8E9;
+    }
+
+    .profile-header {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        background: linear-gradient(135deg, #E8F5E9, #F1F8E9);
+        border-radius: 16px;
+        padding: 1.3rem 1.6rem;
+        margin-bottom: 1.2rem;
+    }
+    .profile-avatar {
+        font-size: 2.5rem;
+        background: white;
+        border-radius: 50%;
+        width: 64px;
+        height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -238,7 +282,10 @@ def render_hero(title: str, subtitle: str):
 
 def render_footer():
     st.markdown(
-        '<div class="footer-note">AI-Powered Carbon Footprint Tracking & Reduction System · Major Project</div>',
+        """<div class="footer-note">
+        AI-Powered Carbon Footprint Tracking & Reduction System · Major Project<br>
+        <span class="footer-links">About &nbsp;·&nbsp; Contact &nbsp;·&nbsp; Privacy Policy &nbsp;·&nbsp; GitHub</span>
+        </div>""",
         unsafe_allow_html=True,
     )
 
@@ -691,7 +738,87 @@ def render_login_page():
 
 
 # ---------------------------------------------------------------------------
-# Sidebar navigation across all planned modules
+# Home / Profile pages
+# ---------------------------------------------------------------------------
+
+def render_home_page():
+    render_hero(
+        f"🌱 Welcome back, {st.session_state.username}!",
+        "Track your electricity usage, cut your carbon footprint, and climb the leaderboard.",
+    )
+
+    user_records = get_records_for_user(st.session_state.username)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown(f"""<div class="metric-card"><p>📝 Entries Logged</p><h2>{len(user_records)}</h2></div>""", unsafe_allow_html=True)
+    with c2:
+        avg = round(sum(r[4] for r in user_records) / len(user_records), 1) if user_records else "--"
+        st.markdown(f"""<div class="metric-card"><p>📈 Your Avg Eco-Score</p><h2>{avg}</h2></div>""", unsafe_allow_html=True)
+    with c3:
+        total_saved = round(sum(r[3] for r in user_records), 1) if user_records else 0
+        st.markdown(f"""<div class="metric-card"><p>🌍 Total CO2 Logged</p><h2>{total_saved} kg</h2></div>""", unsafe_allow_html=True)
+
+    st.write("")
+    st.write("")
+    st.markdown("#### Get started")
+    if st.button("⚡ Go to Electricity Bill Tracker →", type="primary"):
+        st.session_state.nav_page = "⚡ Electricity Bill"
+        st.rerun()
+
+    render_footer()
+
+
+def render_profile_page():
+    render_hero("👤 My Profile", "Your account, stats, and achievements")
+
+    username = st.session_state.username
+    joined = get_user_joined_date(username) or "Unknown"
+    user_records = get_records_for_user(username)
+
+    st.markdown(
+        f"""<div class="profile-header">
+        <div class="profile-avatar">👤</div>
+        <div>
+            <h3 style="margin:0;">{username}</h3>
+            <p style="margin:0; color:#616161;">Member since {joined}</p>
+        </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+    if not user_records:
+        st.info("No entries yet -- log your first electricity bill to see your stats here.")
+        render_footer()
+        return
+
+    df = pd.DataFrame(
+        user_records,
+        columns=["ID", "User", "Units (kWh)", "Emission (kg CO2)", "Eco-Score", "Recommendation", "Date"],
+    )
+    avg_score = round(df["Eco-Score"].mean(), 1)
+    streak = _calculate_good_score_streak(df)
+    badge_emoji, badge_name = _get_badge(streak, avg_score)
+    total_points = int(df["Eco-Score"].sum())
+
+    st.markdown(f"""<div class="badge-banner">{badge_emoji} <b>{badge_name}</b></div>""", unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown(f"""<div class="metric-card"><p>🏅 Total Points</p><h2>{total_points}</h2></div>""", unsafe_allow_html=True)
+    with c2:
+        st.markdown(f"""<div class="metric-card"><p>📈 Avg Eco-Score</p><h2>{avg_score}</h2></div>""", unsafe_allow_html=True)
+    with c3:
+        st.markdown(f"""<div class="metric-card"><p>🔥 Streak</p><h2>{streak}</h2></div>""", unsafe_allow_html=True)
+
+    st.write("")
+    st.markdown("#### My entries")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    render_footer()
+
+
+# ---------------------------------------------------------------------------
+# Top navigation + routing
 # ---------------------------------------------------------------------------
 
 init_db()
@@ -712,18 +839,6 @@ if st.sidebar.button("Log Out"):
     st.rerun()
 
 st.sidebar.divider()
-
-module = st.sidebar.radio(
-    "Modules",
-    [
-        "⚡ Electricity Bill",
-        "🚗 Transportation (GPS)",
-        "⛽ Fuel Usage",
-        "🔮 ML Emission Prediction",
-    ],
-)
-
-st.sidebar.divider()
 st.sidebar.caption("Project Status")
 st.sidebar.markdown(
     "- ✅ Electricity Bill Module\n"
@@ -732,11 +847,36 @@ st.sidebar.markdown(
     "- 🚧 ML Prediction Module"
 )
 
-if module == "⚡ Electricity Bill":
+nav_options = [
+    "🏠 Home",
+    "⚡ Electricity Bill",
+    "🚗 Transportation (GPS)",
+    "⛽ Fuel Usage",
+    "🔮 ML Emission Prediction",
+    "👤 Profile",
+]
+
+if "nav_page" not in st.session_state:
+    st.session_state.nav_page = "🏠 Home"
+
+nav_page = st.radio(
+    "Navigate",
+    nav_options,
+    index=nav_options.index(st.session_state.nav_page),
+    horizontal=True,
+    label_visibility="collapsed",
+)
+st.session_state.nav_page = nav_page
+
+if nav_page == "🏠 Home":
+    render_home_page()
+elif nav_page == "⚡ Electricity Bill":
     render_electricity_module()
-elif module == "🚗 Transportation (GPS)":
+elif nav_page == "🚗 Transportation (GPS)":
     render_placeholder("🚗 Transportation Module", "GPS-based travel tracking to calculate transportation emissions.")
-elif module == "⛽ Fuel Usage":
+elif nav_page == "⛽ Fuel Usage":
     render_placeholder("⛽ Fuel Usage Module", "Track fuel consumption and its associated carbon emissions.")
-else:
+elif nav_page == "🔮 ML Emission Prediction":
     render_placeholder("🔮 ML Emission Prediction", "Machine learning models to forecast future carbon emissions based on usage history.")
+else:
+    render_profile_page()
