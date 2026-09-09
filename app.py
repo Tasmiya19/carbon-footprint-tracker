@@ -23,6 +23,7 @@ import plotly.graph_objects as go
 import tempfile
 import base64
 import time
+from datetime import datetime
 
 from carbon_calculator import build_result, EMISSION_FACTOR_KG_PER_KWH
 from database import init_db, save_record, get_all_records, get_records_for_user, get_leaderboard, create_user, verify_user, get_user_joined_date
@@ -228,6 +229,125 @@ CUSTOM_CSS = """
         color: #66BB6A;
     }
 
+    /* Sidebar streak card ("Your Rhythm" style) */
+    .streak-card {
+        background: linear-gradient(135deg, #1B5E20, #2E7D32);
+        border-radius: 14px;
+        padding: 1rem 1.1rem;
+        color: white;
+        margin-bottom: 1rem;
+    }
+    .streak-card .streak-label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        opacity: 0.75;
+        margin: 0;
+    }
+    .streak-card .streak-number {
+        font-family: 'Poppins', sans-serif;
+        font-size: 2.2rem;
+        font-weight: 700;
+        margin: 0.1rem 0 0 0;
+        line-height: 1;
+    }
+    .streak-card .streak-sub {
+        font-size: 0.78rem;
+        opacity: 0.85;
+        margin: 0.2rem 0 0 0;
+    }
+
+    /* Sidebar profile card at bottom */
+    .sidebar-profile-card {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        background: white;
+        border-radius: 12px;
+        padding: 0.7rem 0.9rem;
+        margin-top: 0.5rem;
+    }
+    .sidebar-profile-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #2E7D32, #66BB6A);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 600;
+        font-size: 0.95rem;
+        flex-shrink: 0;
+    }
+
+    /* Top greeting bar */
+    .top-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.4rem;
+    }
+    .top-bar h2 {
+        font-family: 'Poppins', sans-serif;
+        font-size: 1.5rem;
+        margin: 0;
+        color: #1B5E20;
+    }
+    .top-bar .sync-note {
+        font-size: 0.82rem;
+        color: #9E9E9E;
+    }
+    .top-bar-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #2E7D32, #66BB6A);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 600;
+    }
+
+    /* Calculation history table (Activity/Category/Quantity/Emissions) */
+    .calc-history-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: white;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+    }
+    .calc-history-table th {
+        text-align: left;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #9E9E9E;
+        padding: 0.7rem 1rem;
+        border-bottom: 2px solid #F0F0F0;
+    }
+    .calc-history-table td {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #F5F5F5;
+        font-size: 0.92rem;
+    }
+    .calc-history-table tr:last-child td {
+        border-bottom: none;
+    }
+    .calc-history-table .category-pill {
+        background: #F1F8E9;
+        color: #558B2F;
+        border-radius: 20px;
+        padding: 0.2rem 0.7rem;
+        font-size: 0.78rem;
+    }
+    .calc-history-table .emission-value {
+        color: #2E7D32;
+        font-weight: 600;
+    }
+
     /* Top nav bar (styled radio, horizontal) */
     div[data-testid="stRadio"] > div[role="radiogroup"] {
         display: flex;
@@ -273,6 +393,63 @@ CUSTOM_CSS = """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
+def _get_greeting() -> str:
+    """Time-of-day greeting for the top bar, e.g. 'Good morning, Tasmiya'."""
+    hour = datetime.now().hour
+    if hour < 12:
+        return "Good morning"
+    elif hour < 17:
+        return "Good afternoon"
+    else:
+        return "Good evening"
+
+
+def render_top_bar(username: str):
+    """Greeting header with avatar, similar to a typical dashboard app's top bar."""
+    initial = username[0].upper() if username else "?"
+    st.markdown(
+        f"""<div class="top-bar">
+        <div>
+            <h2>{_get_greeting()}, {username}</h2>
+            <p class="sync-note">Synced just now</p>
+        </div>
+        <div class="top-bar-avatar">{initial}</div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_calc_history_table(records, limit: int = None):
+    """
+    Renders history in the Activity / Category / Quantity / Emissions
+    column style (matching a typical dashboard's calculation-history view).
+    `records` is the raw tuple list from get_all_records()/get_records_for_user().
+    """
+    if limit:
+        records = records[:limit]
+    if not records:
+        st.info("No entries yet.")
+        return
+
+    rows_html = ""
+    for _id, user, units, emission, eco_score, recommendation, created_at in records:
+        rows_html += f"""
+        <tr>
+            <td>⚡ Electricity Bill</td>
+            <td><span class="category-pill">Electricity</span></td>
+            <td>{units} kWh</td>
+            <td class="emission-value">{emission} kg</td>
+        </tr>"""
+
+    st.markdown(
+        f"""<table class="calc-history-table">
+        <thead><tr><th>Activity</th><th>Category</th><th>Quantity</th><th>Emissions</th></tr></thead>
+        <tbody>{rows_html}</tbody>
+        </table>""",
+        unsafe_allow_html=True,
+    )
+
+
 def render_hero(title: str, subtitle: str):
     st.markdown(
         f"""<div class="hero-banner"><h1>{title}</h1><p>{subtitle}</p></div>""",
@@ -293,6 +470,19 @@ def render_footer():
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+def stat_card(icon: str, label: str, value, extra_style: str = "") -> str:
+    """
+    Material-Design-style stat card: a circular colored icon badge above
+    a label and a big value, in a white rounded card with shadow. Used
+    throughout the app so every stat card looks consistent.
+    """
+    return f"""<div class="metric-card" style="{extra_style}">
+        <div class="icon-badge">{icon}</div>
+        <p>{label}</p>
+        <h2>{value}</h2>
+    </div>"""
+
 
 def eco_score_color(score: int) -> str:
     if score >= 75:
@@ -848,28 +1038,62 @@ def render_auth_forms():
 # ---------------------------------------------------------------------------
 
 def render_home_page():
-    render_hero(
-        f"🌱 Welcome back, {st.session_state.username}!",
-        "Track your electricity usage, cut your carbon footprint, and climb the leaderboard.",
-    )
+    render_top_bar(st.session_state.username)
 
     user_records = get_records_for_user(st.session_state.username)
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.markdown(f"""<div class="metric-card"><p>📝 Entries Logged</p><h2>{len(user_records)}</h2></div>""", unsafe_allow_html=True)
+        st.markdown(stat_card("📝", "Entries Logged", len(user_records)), unsafe_allow_html=True)
     with c2:
         avg = round(sum(r[4] for r in user_records) / len(user_records), 1) if user_records else "--"
-        st.markdown(f"""<div class="metric-card"><p>📈 Your Avg Eco-Score</p><h2>{avg}</h2></div>""", unsafe_allow_html=True)
+        st.markdown(stat_card("📈", "Your Avg Eco-Score", avg), unsafe_allow_html=True)
     with c3:
         total_saved = round(sum(r[3] for r in user_records), 1) if user_records else 0
-        st.markdown(f"""<div class="metric-card"><p>🌍 Total CO2 Logged</p><h2>{total_saved} kg</h2></div>""", unsafe_allow_html=True)
+        st.markdown(stat_card("🌍", "Total CO2 Logged", f"{total_saved} kg"), unsafe_allow_html=True)
 
     st.write("")
+    if not user_records:
+        st.markdown("#### Get started")
+        if st.button("⚡ Go to Electricity Bill Tracker →", type="primary"):
+            st.session_state.nav_page = "⚡ Electricity Bill"
+            st.rerun()
+    else:
+        st.markdown('<p class="section-title">Calculation History</p>', unsafe_allow_html=True)
+        st.caption(f"{len(user_records)} tracked entries · most recent first")
+        render_calc_history_table(user_records, limit=5)
+
+    render_footer()
+
+
+def render_reports_page():
+    render_top_bar(st.session_state.username)
+    st.markdown('<p class="section-title">📊 Reports</p>', unsafe_allow_html=True)
+
+    records = get_all_records()
+    if not records:
+        st.info("No records yet -- calculate your first footprint to see reports here.")
+        render_footer()
+        return
+
+    df = pd.DataFrame(
+        records,
+        columns=["ID", "User", "Units (kWh)", "Emission (kg CO2)", "Eco-Score", "Recommendation", "Date"],
+    )
+
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        st.markdown(stat_card("🏆", "Best Eco-Score", int(df["Eco-Score"].max())), unsafe_allow_html=True)
+    with s2:
+        st.markdown(stat_card("📈", "Average Eco-Score", round(df["Eco-Score"].mean(), 1)), unsafe_allow_html=True)
+    with s3:
+        st.markdown(stat_card("🌍", "Total Emissions Logged", f"{round(df['Emission (kg CO2)'].sum(), 1)} kg"), unsafe_allow_html=True)
+
     st.write("")
-    st.markdown("#### Get started")
-    if st.button("⚡ Go to Electricity Bill Tracker →", type="primary"):
-        st.session_state.nav_page = "⚡ Electricity Bill"
-        st.rerun()
+    st.markdown('<p class="section-title">Emissions Trend</p>', unsafe_allow_html=True)
+    st.line_chart(df.set_index("Date")["Emission (kg CO2)"][::-1])
+
+    st.write("")
+    render_leaderboard()
 
     render_footer()
 
@@ -936,45 +1160,77 @@ if not st.session_state.logged_in:
     render_login_page()
     st.stop()
 
-st.sidebar.title("🌍 Carbon Tracker")
-st.sidebar.caption("AI-Powered Carbon Footprint Tracking & Reduction System")
-st.sidebar.markdown(f"👋 Logged in as **{st.session_state.username}**")
-if st.sidebar.button("Log Out"):
-    st.session_state.logged_in = False
-    st.session_state.pop("username", None)
-    st.rerun()
+username = st.session_state.username
+_user_records_for_streak = get_records_for_user(username)
+_streak_df = pd.DataFrame(_user_records_for_streak, columns=["ID", "User", "Units", "Emission", "EcoScore", "Rec", "Date"]) if _user_records_for_streak else pd.DataFrame(columns=["EcoScore"])
+_current_streak = _calculate_good_score_streak(_streak_df) if not _streak_df.empty else 0
 
-st.sidebar.divider()
-st.sidebar.caption("Project Status")
-st.sidebar.markdown(
-    "- ✅ Electricity Bill Module\n"
-    "- 🚧 Transportation Module\n"
-    "- 🚧 Fuel Usage Module\n"
-    "- 🚧 ML Prediction Module"
-)
+with st.sidebar:
+    st.markdown(
+        """<div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:1rem;">
+        <span style="font-size:1.6rem;">🌍</span>
+        <span style="font-family:'Poppins',sans-serif; font-weight:700; font-size:1.15rem; color:#1B5E20;">Carbon Tracker</span>
+        </div>""",
+        unsafe_allow_html=True,
+    )
 
-nav_options = [
-    "🏠 Home",
-    "⚡ Electricity Bill",
-    "🚗 Transportation (GPS)",
-    "⛽ Fuel Usage",
-    "🔮 ML Emission Prediction",
-    "👤 Profile",
-]
+    st.markdown(
+        f"""<div class="streak-card">
+        <p class="streak-label">Your Rhythm</p>
+        <p class="streak-number">{_current_streak}</p>
+        <p class="streak-sub">good-usage entries in a row</p>
+        </div>""",
+        unsafe_allow_html=True,
+    )
 
-if "nav_page" not in st.session_state:
-    st.session_state.nav_page = "🏠 Home"
+    nav_options = [
+        "🏠 Overview",
+        "⚡ Electricity Bill",
+        "🚗 Transportation (GPS)",
+        "⛽ Fuel Usage",
+        "🔮 AI Predictor",
+        "📊 Reports",
+        "👤 Profile",
+    ]
+    if "nav_page" not in st.session_state:
+        st.session_state.nav_page = "🏠 Overview"
 
-nav_page = st.radio(
-    "Navigate",
-    nav_options,
-    index=nav_options.index(st.session_state.nav_page),
-    horizontal=True,
-    label_visibility="collapsed",
-)
-st.session_state.nav_page = nav_page
+    nav_page = st.radio(
+        "Navigate",
+        nav_options,
+        index=nav_options.index(st.session_state.nav_page) if st.session_state.nav_page in nav_options else 0,
+        label_visibility="collapsed",
+        key="sidebar_nav",
+    )
+    st.session_state.nav_page = nav_page
 
-if nav_page == "🏠 Home":
+    st.divider()
+    st.caption("Project Status")
+    st.markdown(
+        "- ✅ Electricity Bill Module\n"
+        "- 🚧 Transportation Module\n"
+        "- 🚧 Fuel Usage Module\n"
+        "- 🚧 ML Prediction Module"
+    )
+
+    st.write("")
+    initial = username[0].upper() if username else "?"
+    st.markdown(
+        f"""<div class="sidebar-profile-card">
+        <div class="sidebar-profile-avatar">{initial}</div>
+        <div>
+            <p style="margin:0; font-weight:600; font-size:0.9rem;">{username}</p>
+            <p style="margin:0; font-size:0.75rem; color:#9E9E9E;">Personal account</p>
+        </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+    if st.button("Log Out", use_container_width=True):
+        st.session_state.logged_in = False
+        st.session_state.pop("username", None)
+        st.rerun()
+
+if nav_page == "🏠 Overview":
     render_home_page()
 elif nav_page == "⚡ Electricity Bill":
     render_electricity_module()
@@ -982,7 +1238,9 @@ elif nav_page == "🚗 Transportation (GPS)":
     render_placeholder("🚗 Transportation Module", "GPS-based travel tracking to calculate transportation emissions.")
 elif nav_page == "⛽ Fuel Usage":
     render_placeholder("⛽ Fuel Usage Module", "Track fuel consumption and its associated carbon emissions.")
-elif nav_page == "🔮 ML Emission Prediction":
-    render_placeholder("🔮 ML Emission Prediction", "Machine learning models to forecast future carbon emissions based on usage history.")
+elif nav_page == "🔮 AI Predictor":
+    render_placeholder("🔮 AI Predictor", "Machine learning models to forecast future carbon emissions based on usage history.")
+elif nav_page == "📊 Reports":
+    render_reports_page()
 else:
     render_profile_page()
